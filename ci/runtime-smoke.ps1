@@ -95,10 +95,16 @@ function Start-Watch([string[]]$watchArgs, [string]$logName) {
 }
 
 function Wait-Watch([System.Diagnostics.Process]$proc, [int]$timeoutSec) {
-  try { Wait-Process -Id $proc.Id -Timeout $timeoutSec -ErrorAction Stop } catch { }
-  $proc.Refresh()
-  if (-not $proc.HasExited) { $proc.Kill(); throw "watch process did not exit within $timeoutSec s" }
-  if ($proc.ExitCode -ne 0) { throw "watch exited with code $($proc.ExitCode)" }
+  # WaitForExit on the Process object itself keeps the handle alive, so
+  # ExitCode is reliably populated afterwards; waiting by Id via
+  # Wait-Process loses that on pwsh 7 (ExitCode comes back empty).
+  if (-not $proc.WaitForExit($timeoutSec * 1000)) {
+    $proc.Kill()
+    throw "watch process did not exit within $timeoutSec s"
+  }
+  if ($null -eq $proc.ExitCode -or $proc.ExitCode -ne 0) {
+    throw "watch exited with code $($proc.ExitCode)"
+  }
 }
 
 # ---------------------------------------------------------------- env report
