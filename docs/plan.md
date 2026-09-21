@@ -230,6 +230,7 @@ taskbar-grouping-rs/
 
 | 层面 | 方法 |
 |---|---|
+| 运行时行为（B+ 双线路 AUMID） | CI `runtime-smoke` job（任务 9）：windows-latest 真实会话拉起 notepad 多开，断言线路一互异后缀 / 线路二精确共享值 / `restore` 复原与映射表清理；截图与日志工件（`ci/runtime-smoke.ps1`） |
 | 符号解析正确性 | host 输出地址 ↔ WinDbg `x explorer!CTaskGroup::GetAppID` 人工比对（每分支抽查 5 个） |
 | 钩子稳定性 | 24 h 冒烟（Phase 0）→ 每次 Release 前的回归清单：多开/关闭/固定/取消固定/重启 explorer/注销重登/缩放变化 |
 | 行为保真 | 用 mod 官方 README 与设置项语义写成的 checklist 逐项打勾（约 25 条） |

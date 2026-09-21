@@ -16,3 +16,30 @@ jobs:
 
       - name: Build (release)
         run: cargo build --release
+
+  # 任务 9（docs/plan.md Phase 0b-(9)）：运行时冒烟。
+  # windows-latest Runner 是真实 Windows 会话：拉起 notepad 窗口，
+  # 对两条线路的 AUMID 改写/复原做断言（ci/runtime-smoke.ps1），
+  # 并采集桌面截图与 explorer/任务栏可行性探针工件。
+  runtime-smoke:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build (release)
+        run: cargo build --release
+
+      - name: Runtime smoke (two strategy lines on real windows)
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File ci/runtime-smoke.ps1
+
+      - name: Upload smoke artifacts (logs + screenshots)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-smoke-artifacts
+          path: ci/out
+          if-no-files-found: warn
