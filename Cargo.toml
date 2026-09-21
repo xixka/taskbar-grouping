@@ -1,0 +1,24 @@
+[package]
+name = "tbg-lite"
+version = "0.1.0"
+edition = "2021"
+description = "Zero-injection Windows taskbar grouping controller (AUMID property-store route)"
+
+[dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_UI_Shell",
+    "Win32_UI_Shell_PropertiesSystem",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Com",
+    "Win32_System_Ole",
+    "Win32_Storage_FileSystem",
+] }
+
+# 体积导向 release 配置（对应 docs/plan.md §6 预算：单文件 < 0.5 MB 目标）
+[profile.release]
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
