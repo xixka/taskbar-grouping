@@ -4,13 +4,8 @@ use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RPC_E_CHANGED_MODE};
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetClassNameW, GetWindowLongW, GetWindowTextW, GetWindowThreadProcessId,
-    IsWindowVisible, GWL_EXSTYLE, WS_EX_TOOLWINDOW, WNDENUMPROC,
+    IsWindowVisible, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
 };
-
-/// `str` → 以 NUL 结尾的 UTF-16 缓冲。
-pub(crate) fn to_wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
 
 /// 把 API 写入 `buf` 的前 `len` 个 UTF-16 码元转成 `String`。
 pub(crate) fn wide_buf_to_string(buf: &[u16], len: i32) -> String {
@@ -19,18 +14,6 @@ pub(crate) fn wide_buf_to_string(buf: &[u16], len: i32) -> String {
     }
     let end = (len as usize).min(buf.len());
     String::from_utf16_lossy(&buf[..end])
-}
-
-/// `PWSTR`（调用方负责以 `CoTaskMemFree` 释放）→ `String`。
-pub(crate) unsafe fn pwstr_to_string(pw: windows::core::PWSTR) -> String {
-    if pw.0.is_null() {
-        return String::new();
-    }
-    let mut len = 0usize;
-    while *pw.0.add(len) != 0 {
-        len += 1;
-    }
-    String::from_utf16_lossy(std::slice::from_raw_parts(pw.0, len))
 }
 
 /// 展示用：空 AUMID 显示为 `<empty>`。
@@ -51,10 +34,14 @@ pub(crate) struct ComGuard {
 impl ComGuard {
     pub(crate) fn init() -> Result<Self, String> {
         unsafe {
-            match CoInitializeEx(None, COINIT_APARTMENTTHREADED) {
-                Ok(()) => Ok(ComGuard { owned: true }),
-                Err(e) if e.code() == RPC_E_CHANGED_MODE => Ok(ComGuard { owned: false }),
-                Err(e) => Err(format!("CoInitializeEx failed: {e}")),
+            // windows 0.58：CoInitializeEx 返回裸 HRESULT（S_OK / S_FALSE 均视为本方持有）
+            let hr = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
+            if hr.is_ok() {
+                Ok(ComGuard { owned: true })
+            } else if hr == RPC_E_CHANGED_MODE {
+                Ok(ComGuard { owned: false })
+            } else {
+                Err(format!("CoInitializeEx failed: {hr}"))
             }
         }
     }
@@ -113,13 +100,14 @@ pub(crate) unsafe fn enum_top_level_windows() -> Vec<HWND> {
 }
 
 /// 解析 HWND 参数（十六进制，可带 0x 前缀）。
+/// windows 0.58 的 HWND 是指针包装，需经 usize 中转构造。
 pub(crate) fn parse_hwnd(s: &str) -> Result<HWND, String> {
     let t = s.trim().trim_start_matches("0x").trim_start_matches("0X");
     isize::from_str_radix(t, 16)
-        .map(HWND)
+        .map(|v| HWND(v as usize as *mut core::ffi::c_void))
         .map_err(|_| format!("invalid HWND '{s}' (expected hex, e.g. 0x00000000010C12A8)"))
 }
 
 pub(crate) fn hwnd_hex(hwnd: HWND) -> String {
-    format!("{:X}", hwnd.0)
+    format!("{:X}", hwnd.0 as usize)
 }
