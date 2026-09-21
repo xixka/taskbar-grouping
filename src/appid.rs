@@ -42,6 +42,15 @@ pub(crate) unsafe fn set_aumid(hwnd: HWND, value: &str) -> Result<()> {
     store.Commit()
 }
 
+/// 清除窗口 AppUserModelID（写 VT_EMPTY，任务 7：还原"原本无 AUMID"的
+/// 窗口时使用）。零值 PROPVARIANT 即 VT_EMPTY。
+pub(crate) unsafe fn clear_aumid(hwnd: HWND) -> Result<()> {
+    let store = prop_store(hwnd)?;
+    let pv = PROPVARIANT::new();
+    store.SetValue(&PKEY_AppUserModel_ID, &pv)?;
+    store.Commit()
+}
+
 /// `suffixed_aumid` 的返回值。
 pub(crate) struct SuffixedAumid {
     /// 追加后缀后的完整值。
@@ -68,5 +77,22 @@ pub(crate) fn suffixed_aumid(original: &str, hwnd: HWND) -> SuffixedAumid {
     SuffixedAumid {
         value: format!("{head}{SUFFIX_MARKER}{hex}"),
         truncated,
+    }
+}
+
+/// 解析携带本工具后缀的 AUMID（任务 7）：返回 `Some(原始部分)`。
+/// 仅当标记之后是合法的大写十六进制 HWND 尾巴（1–16 位）时才认定为本
+/// 工具所写，防止误剥其他来源的相似字符串；原始部分为空串表示"原本无
+/// AUMID，还原时应清除属性"（配合 `clear_aumid`）。
+pub(crate) fn strip_suffix(aumid: &str) -> Option<&str> {
+    let pos = aumid.rfind(SUFFIX_MARKER)?;
+    let (head, tail) = aumid.split_at(pos);
+    let hex = &tail[SUFFIX_MARKER.len()..];
+    let hex_ok = (1..=16).contains(&hex.len())
+        && hex.bytes().all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b));
+    if hex_ok {
+        Some(head)
+    } else {
+        None
     }
 }

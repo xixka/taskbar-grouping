@@ -1,9 +1,9 @@
 //! tbg-lite — Windows 任务栏分组控制（零注入路线 B+）
 //!
-//! 当前任务：5–6（Phase 0b PoC）。CLI 提供 `inspect` / `set` / `watch`：
-//! 任务 5 在真实 Windows 上手工验证 `SHGetPropertyStoreForWindow` +
-//! `PKEY_AppUserModel_ID` 的读写语义；任务 6 用 SetWinEventHook 事件驱动地
-//! 自动改写新窗口 AUMID（docs/plan.md §7 Phase 0b）。
+//! 当前任务：5–7（Phase 0b PoC）。CLI 提供 `inspect` / `set` / `watch` /
+//! `restore`：任务 5 手工验证属性存储 API 读写语义；任务 6 用
+//! SetWinEventHook 事件驱动地自动改写新窗口 AUMID；任务 7 剥离后缀
+//! 还原原生分组（docs/plan.md §7 Phase 0b）。
 
 mod appid;
 mod winevent;
@@ -22,6 +22,7 @@ USAGE:
     tbg-lite inspect [--hwnd <HEX>] [--all]
     tbg-lite set --hwnd <HEX> (--suffix | --value <APPID>)
     tbg-lite watch [--duration <SECS>] [--dry-run] [--verbose]
+    tbg-lite restore [--hwnd <HEX>]
 
 COMMANDS:
     inspect   list top-level windows and their AppUserModelID
@@ -37,9 +38,13 @@ COMMANDS:
               --duration <SECS>  run length (default 60; 0 = until Ctrl+C)
               --dry-run          log only, never write AUMID
               --verbose          also log skipped windows with reasons
+    restore   strip the per-window suffix and restore the original
+              AppUserModelID (docs/plan.md task 7); windows whose
+              original AUMID was empty get the property cleared
+              --hwnd <HEX>   restore one window; without it, all windows
 
 STATUS:
-    tasks 5-6 (Phase 0b PoC) — see docs/plan.md §7 Phase 0b
+    tasks 5-7 (Phase 0b PoC) — see docs/plan.md §7 Phase 0b
 ";
 
 fn main() -> ExitCode {
@@ -56,6 +61,7 @@ fn main() -> ExitCode {
         Some("inspect") => report(cmd_inspect(&args[1..])),
         Some("set") => report(cmd_set(&args[1..])),
         Some("watch") => report(cmd_watch(&args[1..])),
+        Some("restore") => report(cmd_restore(&args[1..])),
         Some(other) => {
             eprintln!("tbg-lite: unknown command '{other}' (see --help)");
             ExitCode::from(2)
@@ -164,6 +170,95 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
         dry_run,
         verbose,
     })
+}
+
+fn cmd_restore(args: &[String]) -> Result<(), String> {
+    let mut hwnd: Option<HWND> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--hwnd" => hwnd = Some(winutil::parse_hwnd(next_arg(&mut it, "--hwnd")?)?),
+            other => return Err(format!("restore: unknown argument '{other}'")),
+        }
+    }
+    let _com = winutil::ComGuard::init()?;
+    unsafe {
+        // 无 --hwnd 时全量扫描顶层窗口，逐个还原带标记的窗口
+        let targets: Vec<HWND> = match hwnd {
+            Some(h) => vec![h],
+            None => winutil::enum_top_level_windows(),
+        };
+        let single = targets.len() == 1;
+        let mut restored = 0u32;
+        let mut cleared = 0u32;
+        let mut skipped = 0u32;
+        let mut failed = 0u32;
+        for hwnd in &targets {
+            let aumid = match appid::get_aumid(*hwnd) {
+                Ok(a) => a,
+                Err(e) => {
+                    failed += 1;
+                    println!("0x{} read FAILED: {e}", winutil::hwnd_hex(*hwnd));
+                    continue;
+                }
+            };
+            let Some(original) = appid::strip_suffix(&aumid) else {
+                skipped += 1;
+                if single {
+                    println!(
+                        "0x{} no suffix marker, nothing to restore (aumid: {})",
+                        winutil::hwnd_hex(*hwnd),
+                        winutil::shown_aumid(&aumid)
+                    );
+                }
+                continue;
+            };
+            if original.is_empty() {
+                // 原本无 AUMID：清除属性（VT_EMPTY）
+                match appid::clear_aumid(*hwnd) {
+                    Ok(()) => {
+                        cleared += 1;
+                        println!(
+                            "0x{} {} -> <cleared>",
+                            winutil::hwnd_hex(*hwnd),
+                            aumid
+                        );
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        println!("0x{} clear FAILED: {e}", winutil::hwnd_hex(*hwnd));
+                    }
+                }
+            } else {
+                match appid::set_aumid(*hwnd, original) {
+                    Ok(()) => {
+                        restored += 1;
+                        println!(
+                            "0x{} \"{}\" -> \"{}\"",
+                            winutil::hwnd_hex(*hwnd),
+                            aumid,
+                            original
+                        );
+                    }
+                    Err(e) => {
+                        failed += 1;
+                        println!("0x{} restore FAILED: {e}", winutil::hwnd_hex(*hwnd));
+                    }
+                }
+            }
+        }
+        println!();
+        println!(
+            "restore summary: restored={restored} cleared={cleared} skipped(no marker)={skipped} failed={failed}"
+        );
+        println!(
+            "note: whether taskbar buttons fully return to native grouping must be observed on real Windows"
+        );
+        if failed > 0 {
+            return Err(format!("restore: {failed} window(s) failed"));
+        }
+        Ok(())
+    }
 }
 
 fn cmd_set(args: &[String]) -> Result<(), String> {
