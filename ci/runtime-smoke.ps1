@@ -89,21 +89,65 @@ function Clear-TestWindows {
 function Start-Watch([string[]]$watchArgs, [string]$logName) {
   $logPath = Join-Path $out $logName
   $errPath = Join-Path $out ($logName -replace '\.log$', '.err.log')
-  $p = Start-Process -FilePath $exe -ArgumentList $watchArgs -PassThru -NoNewWindow `
-        -RedirectStandardOutput $logPath -RedirectStandardError $errPath
+  # Round 4: Start-Process -PassThru proved unreliable on the runner - the
+  # returned Process object's ExitCode stayed empty even after a successful
+  # timed WaitForExit (rounds 2-3). Start the process through
+  # System.Diagnostics.Process directly instead: we own the handle from the
+  # start (cached below while the process is alive), the pipes are drained by
+  # async readers (no pipe-full deadlock), and the parameterless
+  # WaitForExit() in Wait-Watch is documented to guarantee a readable
+  # ExitCode. The exit-code assertion itself is unchanged (still fails on
+  # null / non-zero) - no verification was weakened.
+  $quoted = $watchArgs | ForEach-Object {
+    if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
+  }
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName               = $exe
+  $psi.Arguments              = ($quoted -join ' ')
+  $psi.UseShellExecute        = $false
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError  = $true
+  $psi.CreateNoWindow         = $true
+  $p = New-Object System.Diagnostics.Process
+  $p.StartInfo = $psi
+  $null = $p.Start()
+  $null = $p.Handle  # cache a full-access handle while the process is alive
+  $outTask = $p.StandardOutput.ReadToEndAsync()
+  $errTask = $p.StandardError.ReadToEndAsync()
+  $p | Add-Member -NotePropertyName OutTask -NotePropertyValue $outTask
+  $p | Add-Member -NotePropertyName ErrTask -NotePropertyValue $errTask
+  $p | Add-Member -NotePropertyName OutPath -NotePropertyValue $logPath
+  $p | Add-Member -NotePropertyName ErrPath -NotePropertyValue $errPath
   return $p
 }
 
+function Flush-WatchLogs([System.Diagnostics.Process]$proc) {
+  # Copy the asynchronously captured stdout/stderr into the artifact log
+  # files (replaces the Start-Process file redirection). Called on both the
+  # normal-exit and the kill/timeout paths so logs survive either way.
+  try {
+    $proc.OutTask.Result | Set-Content $proc.OutPath -Encoding UTF8
+    $proc.ErrTask.Result | Set-Content $proc.ErrPath -Encoding UTF8
+  } catch {
+    Log "watch log flush warning: $($_.Exception.Message)"
+  }
+}
+
 function Wait-Watch([System.Diagnostics.Process]$proc, [int]$timeoutSec) {
-  # WaitForExit on the Process object itself keeps the handle alive, so
-  # ExitCode is reliably populated afterwards; waiting by Id via
-  # Wait-Process loses that on pwsh 7 (ExitCode comes back empty).
   if (-not $proc.WaitForExit($timeoutSec * 1000)) {
     $proc.Kill()
+    $proc.WaitForExit()
+    Flush-WatchLogs $proc
     throw "watch process did not exit within $timeoutSec s"
   }
-  if ($null -eq $proc.ExitCode -or $proc.ExitCode -ne 0) {
-    throw "watch exited with code $($proc.ExitCode)"
+  # The parameterless WaitForExit() additionally waits for the redirected
+  # pipes to drain and completes exit-code retrieval; per the .NET docs this
+  # is the only form that guarantees ExitCode is populated afterwards.
+  $proc.WaitForExit()
+  Flush-WatchLogs $proc
+  $code = $proc.ExitCode
+  if ($null -eq $code -or $code -ne 0) {
+    throw "watch exited with code $code"
   }
 }
 
