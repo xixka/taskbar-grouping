@@ -1,11 +1,14 @@
 //! tbg-lite — Windows 任务栏分组控制（零注入路线 B+）
 //!
-//! 当前任务：5–7（Phase 0b PoC）。CLI 提供 `inspect` / `set` / `watch` /
+//! 当前任务：5–8（Phase 0b PoC）。CLI 提供 `inspect` / `set` / `watch` /
 //! `restore`：任务 5 手工验证属性存储 API 读写语义；任务 6 用
 //! SetWinEventHook 事件驱动地自动改写新窗口 AUMID；任务 7 剥离后缀
-//! 还原原生分组（docs/plan.md §7 Phase 0b）。
+//! 还原原生分组；任务 8 双线路切换——`watch --strategy ungroup|group`，
+//! 线路一每窗口后缀（取消分组），线路二共享 AUMID（自定义分组，
+//! 原值落盘 tbg-restore.tsv 供还原）（docs/plan.md §7 Phase 0b）。
 
 mod appid;
+mod restoremap;
 mod winevent;
 mod winutil;
 
@@ -21,7 +24,8 @@ USAGE:
     tbg-lite [--version | --help]
     tbg-lite inspect [--hwnd <HEX>] [--all]
     tbg-lite set --hwnd <HEX> (--suffix | --value <APPID>)
-    tbg-lite watch [--duration <SECS>] [--dry-run] [--verbose]
+    tbg-lite watch [--strategy <ungroup|group>] [--group <NAME>]
+                   [--duration <SECS>] [--dry-run] [--verbose]
     tbg-lite restore [--hwnd <HEX>]
 
 COMMANDS:
@@ -31,20 +35,31 @@ COMMANDS:
     set       rewrite one window's AppUserModelID (docs/plan.md task 5)
               --suffix       append the per-window ungroup marker (~TBG~w<HWND>)
               --value <ID>   set an exact AppUserModelID
-    watch     event-driven PoC (docs/plan.md task 6): listen for new
+    watch     event-driven PoC (docs/plan.md task 6+8): listen for new
               top-level windows via SetWinEventHook (out-of-context,
-              no injection) and rewrite their AUMID with the per-window
-              suffix; prints stats plus a missed/reverted scan at exit
+              no injection) and rewrite their AUMID along one of two
+              strategy lines (docs/plan.md §4 route B+):
+                --strategy ungroup   per-window suffix ~TBG~w<HWND>,
+                                     every window gets its own taskbar
+                                     group (default; disables grouping)
+                --strategy group     rewrite every new candidate window
+                                     to the shared AUMID TBG.Group.<NAME>
+                                     (custom grouping; requires --group;
+                                     originals are persisted to
+                                     tbg-restore.tsv next to the exe)
               --duration <SECS>  run length (default 60; 0 = until Ctrl+C)
               --dry-run          log only, never write AUMID
               --verbose          also log skipped windows with reasons
-    restore   strip the per-window suffix and restore the original
-              AppUserModelID (docs/plan.md task 7); windows whose
-              original AUMID was empty get the property cleared
+    restore   restore native AppUserModelIDs (docs/plan.md task 7+8):
+              line 1 strips the per-window suffix; line 2 looks the
+              original value up in tbg-restore.tsv. Windows whose
+              original AUMID was empty get the property cleared;
+              group-marked windows without a map entry are reported
+              as orphans and left untouched
               --hwnd <HEX>   restore one window; without it, all windows
 
 STATUS:
-    tasks 5-7 (Phase 0b PoC) — see docs/plan.md §7 Phase 0b
+    tasks 5-8 (Phase 0b PoC) — see docs/plan.md §7 Phase 0b
 ";
 
 fn main() -> ExitCode {
@@ -110,6 +125,7 @@ fn cmd_inspect(args: &[String]) -> Result<(), String> {
             println!("Title    : {}", winutil::window_text(hwnd));
             println!("AUMID    : {}", winutil::shown_aumid(&aumid));
             println!("Suffixed : {}", aumid.contains(appid::SUFFIX_MARKER));
+            println!("Grouped  : {}", appid::is_group_aumid(&aumid));
         }
         return Ok(());
     }
@@ -151,6 +167,8 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     let mut duration_secs: u64 = 60;
     let mut dry_run = false;
     let mut verbose = false;
+    let mut strategy = winevent::WatchStrategy::Ungroup;
+    let mut group: Option<String> = None;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -160,15 +178,41 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
                     .parse()
                     .map_err(|_| format!("watch: invalid duration '{v}' (expected seconds)"))?;
             }
+            "--strategy" => {
+                let v = next_arg(&mut it, "--strategy")?;
+                strategy = match v.as_str() {
+                    "ungroup" => winevent::WatchStrategy::Ungroup,
+                    "group" => winevent::WatchStrategy::Group,
+                    other => {
+                        return Err(format!(
+                            "watch: unknown strategy '{other}' (expected ungroup|group)"
+                        ))
+                    }
+                };
+            }
+            "--group" => group = Some(next_arg(&mut it, "--group")?.clone()),
             "--dry-run" => dry_run = true,
             "--verbose" => verbose = true,
             other => return Err(format!("watch: unknown argument '{other}'")),
         }
     }
+    // 线路二必须显式给组名；线路一不允许带 --group（防止歧义）
+    let group_name = match (strategy, group) {
+        (winevent::WatchStrategy::Group, Some(n)) => Some(n),
+        (winevent::WatchStrategy::Group, None) => {
+            return Err("watch: --strategy group requires --group <NAME>".into())
+        }
+        (winevent::WatchStrategy::Ungroup, None) => None,
+        (winevent::WatchStrategy::Ungroup, Some(_)) => {
+            return Err("watch: --group is only valid together with --strategy group".into())
+        }
+    };
     winevent::run(winevent::WatchOptions {
         duration: Duration::from_secs(duration_secs),
         dry_run,
         verbose,
+        strategy,
+        group_name,
     })
 }
 
@@ -192,7 +236,11 @@ fn cmd_restore(args: &[String]) -> Result<(), String> {
         let mut restored = 0u32;
         let mut cleared = 0u32;
         let mut skipped = 0u32;
+        let mut orphans = 0u32;
         let mut failed = 0u32;
+        // 线路二的还原映射（懒加载：首次遇到共享 AUMID 才读盘）
+        let mut map: Option<restoremap::RestoreMap> = None;
+        let mut map_loaded = false;
         for hwnd in &targets {
             let aumid = match appid::get_aumid(*hwnd) {
                 Ok(a) => a,
@@ -202,54 +250,130 @@ fn cmd_restore(args: &[String]) -> Result<(), String> {
                     continue;
                 }
             };
-            let Some(original) = appid::strip_suffix(&aumid) else {
+            if let Some(original) = appid::strip_suffix(&aumid) {
+                // 线路一：后缀内联还原（任务 7）
+                if original.is_empty() {
+                    // 原本无 AUMID：清除属性（VT_EMPTY）
+                    match appid::clear_aumid(*hwnd) {
+                        Ok(()) => {
+                            cleared += 1;
+                            println!("0x{} {} -> <cleared>", winutil::hwnd_hex(*hwnd), aumid);
+                        }
+                        Err(e) => {
+                            failed += 1;
+                            println!("0x{} clear FAILED: {e}", winutil::hwnd_hex(*hwnd));
+                        }
+                    }
+                } else {
+                    match appid::set_aumid(*hwnd, original) {
+                        Ok(()) => {
+                            restored += 1;
+                            println!(
+                                "0x{} \"{}\" -> \"{}\"",
+                                winutil::hwnd_hex(*hwnd),
+                                aumid,
+                                original
+                            );
+                        }
+                        Err(e) => {
+                            failed += 1;
+                            println!("0x{} restore FAILED: {e}", winutil::hwnd_hex(*hwnd));
+                        }
+                    }
+                }
+            } else if appid::is_group_aumid(&aumid) {
+                // 线路二：从还原映射表取原值（任务 8）
+                let key = hwnd.0 as usize;
+                if !map_loaded {
+                    let dir = std::env::current_exe()
+                        .ok()
+                        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                        .ok_or_else(|| {
+                            "restore: cannot locate exe directory for restore map".to_string()
+                        })?;
+                    match restoremap::RestoreMap::load(&dir) {
+                        Ok(m) => map = Some(m),
+                        Err(e) => {
+                            failed += 1;
+                            println!("0x{} restore map load FAILED: {e}", winutil::hwnd_hex(*hwnd));
+                            continue;
+                        }
+                    }
+                    map_loaded = true;
+                }
+                if let Some(m) = map.as_mut() {
+                    match m.take(key, &aumid) {
+                        Some(original) if original.is_empty() => {
+                            match appid::clear_aumid(*hwnd) {
+                                Ok(()) => {
+                                    cleared += 1;
+                                    println!(
+                                        "0x{} \"{}\" -> <cleared>",
+                                        winutil::hwnd_hex(*hwnd),
+                                        aumid
+                                    );
+                                }
+                                Err(e) => {
+                                    failed += 1;
+                                    println!(
+                                        "0x{} clear FAILED: {e}",
+                                        winutil::hwnd_hex(*hwnd)
+                                    );
+                                }
+                            }
+                        }
+                        Some(original) => match appid::set_aumid(*hwnd, &original) {
+                            Ok(()) => {
+                                restored += 1;
+                                println!(
+                                    "0x{} \"{}\" -> \"{}\"",
+                                    winutil::hwnd_hex(*hwnd),
+                                    aumid,
+                                    original
+                                );
+                            }
+                            Err(e) => {
+                                failed += 1;
+                                println!("0x{} restore FAILED: {e}", winutil::hwnd_hex(*hwnd));
+                            }
+                        },
+                        None => {
+                            // 无匹配条目（HWND 复用 / 映射丢失）：只报告，不动
+                            orphans += 1;
+                            println!(
+                                "0x{} group AUMID \"{}\" has no matching map entry; left untouched",
+                                winutil::hwnd_hex(*hwnd),
+                                aumid
+                            );
+                        }
+                    }
+                } else {
+                    orphans += 1;
+                    println!(
+                        "0x{} restore map unavailable; left untouched",
+                        winutil::hwnd_hex(*hwnd)
+                    );
+                }
+            } else {
                 skipped += 1;
                 if single {
                     println!(
-                        "0x{} no suffix marker, nothing to restore (aumid: {})",
+                        "0x{} no marker, nothing to restore (aumid: {})",
                         winutil::hwnd_hex(*hwnd),
                         winutil::shown_aumid(&aumid)
                     );
                 }
-                continue;
-            };
-            if original.is_empty() {
-                // 原本无 AUMID：清除属性（VT_EMPTY）
-                match appid::clear_aumid(*hwnd) {
-                    Ok(()) => {
-                        cleared += 1;
-                        println!(
-                            "0x{} {} -> <cleared>",
-                            winutil::hwnd_hex(*hwnd),
-                            aumid
-                        );
-                    }
-                    Err(e) => {
-                        failed += 1;
-                        println!("0x{} clear FAILED: {e}", winutil::hwnd_hex(*hwnd));
-                    }
-                }
-            } else {
-                match appid::set_aumid(*hwnd, original) {
-                    Ok(()) => {
-                        restored += 1;
-                        println!(
-                            "0x{} \"{}\" -> \"{}\"",
-                            winutil::hwnd_hex(*hwnd),
-                            aumid,
-                            original
-                        );
-                    }
-                    Err(e) => {
-                        failed += 1;
-                        println!("0x{} restore FAILED: {e}", winutil::hwnd_hex(*hwnd));
-                    }
-                }
+            }
+        }
+        // 映射表有变动（take/remove）则回写；还原完毕且表空则文件删除
+        if map_loaded {
+            if let Some(m) = &map {
+                m.save().map_err(|e| format!("restore: {e}"))?;
             }
         }
         println!();
         println!(
-            "restore summary: restored={restored} cleared={cleared} skipped(no marker)={skipped} failed={failed}"
+            "restore summary: restored={restored} cleared={cleared} skipped(no marker)={skipped} orphans(no map entry)={orphans} failed={failed}"
         );
         println!(
             "note: whether taskbar buttons fully return to native grouping must be observed on real Windows"

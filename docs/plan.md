@@ -188,6 +188,8 @@ taskbar-grouping-rs/
 5. **API 语义 PoC**（~200 行 Rust）：手工对若干窗口调 `SHGetPropertyStoreForWindow` + `PKEY_AppUserModel_ID`：① 每窗口加后缀能否立即拆成独立按钮；② 属性写入后 explorer 是否即时重排（记录延迟毫秒数）；③ UWP/Chrome/Explorer 多窗口/记事本等 6 类应用逐一记录"生效/覆盖/无效"。
 6. **事件驱动 PoC**（~300 行 Rust）：`SetWinEventHook`（EVENT_OBJECT_SHOW/CREATE，WINEVENT_SKIPOWNPROCESS）→ 自动改写新窗口 AUMID；高频连开 50 窗口压测，统计：竞态次数（先并组后跳变）、漏检数、CPU/内存占用。
 7. **还原 PoC**：清除自定义 AUMID 后按钮是否完全恢复原生行为。
+8. **双线路 CLI 切换**（2026-09-21 增补）：`watch --strategy ungroup|group`——线路一为既有"每窗口后缀"（取消分组，条目 6），线路二把全部新候选窗口统一改写为共享 AUMID `TBG.Group.<name>`（自定义分组，§4 路线 B+"共享前缀"分支）；两线路标记互斥、`--dry-run` 通用。线路二的原值落盘 exe 同目录 `tbg-restore.tsv`（附录 B.3 的 recovery 模式），`restore` 据此复原；无映射条目的孤儿窗口只报告、不动（防 HWND 复用误还原）。
+9. **CI 运行时冒烟**（2026-09-21 增补）：GitHub Actions `runtime-smoke` job（windows-latest）在真实 Windows 会话内拉起 GUI 窗口（notepad 多开），对两条线路分别断言——线路一全部窗口带互异后缀、线路二全部窗口 AUMID 精确相等、`restore` 后逐窗复原；采集 watch/restore/inspect 日志与桌面截图（含 explorer/任务栏可行性探针）为工件。回答"Phase 0b 行为验收能否搬上 CI"（此前判断"必须真机人工"，windows-latest Runner 本身即真机，可先验证 API 行为层）。
 
 **验收**：0b 的量化裁决线——竞态可感知率 <5%、应用覆盖 ≥90%、常驻内存 <10 MB 即视为达标。
 

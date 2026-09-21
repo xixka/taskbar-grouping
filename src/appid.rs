@@ -51,6 +51,37 @@ pub(crate) unsafe fn clear_aumid(hwnd: HWND) -> Result<()> {
     store.Commit()
 }
 
+/// 线路二（自定义分组，任务 8）的共享 AUMID 前缀。
+/// 全部候选窗口被改写为 `TBG.Group.<name>`，任务栏据此把不同来源的
+/// 窗口归入同一按钮（docs/plan.md §4 路线 B+ 的"共享前缀"分支）。
+pub(crate) const GROUP_PREFIX: &str = "TBG.Group.";
+
+/// 校验组名并构造线路二的共享 AUMID：`TBG.Group.<name>`。
+/// 组名限 1..=32 个字符，字符集 [A-Za-z0-9._-]（与 AUMID 习惯一致，
+/// 排除空白与控制字符）；总长恒不超过 11 + 32 = 43 < `AUMID_MAX_LEN`。
+/// 组名不合法时返回 Err（CLI 层据此报错，不做静默修正）。
+pub(crate) fn group_aumid(name: &str) -> Result<String, String> {
+    let n = name.chars().count();
+    let charset_ok = name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'));
+    if !(1..=32).contains(&n) || !charset_ok {
+        return Err(format!(
+            "invalid group name '{name}' (allowed: 1-32 chars of A-Z a-z 0-9 . _ -)"
+        ));
+    }
+    Ok(format!("{GROUP_PREFIX}{name}"))
+}
+
+/// 是否本工具写入的共享分组 AUMID（线路二标记）。
+/// 线路一（每窗口后缀）与线路二的标记互斥：watch 改写前据此避免叠加。
+pub(crate) fn is_group_aumid(aumid: &str) -> bool {
+    match aumid.strip_prefix(GROUP_PREFIX) {
+        Some(rest) => !rest.is_empty(),
+        None => false,
+    }
+}
+
 /// `suffixed_aumid` 的返回值。
 pub(crate) struct SuffixedAumid {
     /// 追加后缀后的完整值。

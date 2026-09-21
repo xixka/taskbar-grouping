@@ -1,15 +1,22 @@
-//! 事件驱动 AUMID 改写 PoC（任务 6，docs/plan.md §7 Phase 0b-(6)）。
+//! 事件驱动 AUMID 改写 PoC（任务 6/8，docs/plan.md §7 Phase 0b-(6)(8)）。
 //!
 //! `SetWinEventHook`（EVENT_OBJECT_CREATE / EVENT_OBJECT_SHOW /
 //! EVENT_OBJECT_DESTROY，WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS）
 //! 监听顶层窗口事件——零注入：回调只在本进程自己的消息泵里执行。
-//! 对"看起来会在任务栏出现按钮"的新窗口自动追加每窗口去分组后缀
-//! （docs/plan.md §4 路线 B+）。EVENT_OBJECT_DESTROY 仅用于簿记
-//! （窗口销毁后移出已处理集合，防 HWND 复用污染统计）。
+//! 对"看起来会在任务栏出现按钮"的新窗口按 `--strategy` 指定的线路改写
+//! （docs/plan.md §4 路线 B+）：
+//!
+//! - 线路一 `ungroup`：每窗口后缀 `~TBG~w<HWND>`，取消任务栏分组（任务 6）；
+//! - 线路二 `group`：全部候选窗口统一改写为共享 AUMID `TBG.Group.<name>`，
+//!   自定义分组（任务 8）；原值落盘 `tbg-restore.tsv` 供 `restore` 复原。
+//!
+//! EVENT_OBJECT_DESTROY 仅用于簿记（窗口销毁后移出已处理集合并丢弃
+//! 线路二的还原映射条目，防 HWND 复用污染统计与还原）。
 //!
 //! 退出时输出统计并全量复扫，给出"漏检 / 被应用回写"数据，对应计划中
 //! "高频连开 50 窗口压测"的观测输入。竞态（先并组后跳变）本身需在
-//! 真实 Windows 上人工观察（运行时行为待 Windows 实测）。
+//! 真实 Windows 上人工观察（运行时行为待 Windows 实测；任务 9 起部分
+//! 行为断言已可由 CI 冒烟代行）。
 
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -24,7 +31,29 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 
 use crate::appid;
+use crate::restoremap::RestoreMap;
 use crate::winutil;
+
+/// watch 的两条实现线路（任务 8，`--strategy` 切换；
+/// docs/plan.md §4 路线 B+：每窗口后缀 = 取消分组；共享 AUMID = 自定义组）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WatchStrategy {
+    /// 线路一：每窗口后缀（`~TBG~w<HWND>`），让每个窗口落到独立的
+    /// 任务栏组 = 取消分组。
+    Ungroup,
+    /// 线路二：全部候选窗口改写为共享 AUMID（`TBG.Group.<name>`），
+    /// 不同来源的窗口合成一个任务栏组 = 自定义分组。
+    Group,
+}
+
+impl WatchStrategy {
+    fn label(&self) -> &'static str {
+        match self {
+            Self::Ungroup => "ungroup (per-window suffix, line 1)",
+            Self::Group => "group (shared AUMID, line 2)",
+        }
+    }
+}
 
 pub(crate) struct WatchOptions {
     /// 监听时长；0 = 直至 Ctrl+C（控制台默认处理为强杀进程，无统计输出）。
@@ -33,6 +62,10 @@ pub(crate) struct WatchOptions {
     pub(crate) dry_run: bool,
     /// 额外输出被跳过的窗口与原因（not-app-window 噪声除外）。
     pub(crate) verbose: bool,
+    /// 改写线路（任务 8）。
+    pub(crate) strategy: WatchStrategy,
+    /// 线路二的组名（`--group`；strategy == Group 时必有，main 层已校验）。
+    pub(crate) group_name: Option<String>,
 }
 
 /// 观测统计（对应 docs/plan.md §7 Phase 0b-(6) 的压测数据需求）。
@@ -53,11 +86,18 @@ struct Stats {
     skipped_cloaked: u64,
     skipped_read_fail: u64,
     skipped_already_marked: u64,
+    /// 带着另一条线路的标记出现（防止两种改写叠加而跳过）。
+    skipped_cross_line: u64,
 }
 
 struct WatcherState {
     dry_run: bool,
     verbose: bool,
+    strategy: WatchStrategy,
+    /// 线路二的共享 AUMID（`strategy == Ungroup` 时为空串）。
+    group_value: String,
+    /// 线路二的还原映射表（`strategy == Ungroup` 时为 None）。
+    map: Option<RestoreMap>,
     started: Instant,
     /// watch 启动前就存在的应用窗口（存量，不处理、不计漏检）。
     baseline: HashSet<usize>,
@@ -90,10 +130,17 @@ unsafe extern "system" fn win_event_cb(
 }
 
 impl WatcherState {
-    fn new(dry_run: bool, verbose: bool) -> Self {
+    fn new(
+        opts: &WatchOptions,
+        group_value: String,
+        map: Option<RestoreMap>,
+    ) -> Self {
         Self {
-            dry_run,
-            verbose,
+            dry_run: opts.dry_run,
+            verbose: opts.verbose,
+            strategy: opts.strategy,
+            group_value,
+            map,
             started: Instant::now(),
             baseline: HashSet::new(),
             baseline_count: 0,
@@ -136,8 +183,18 @@ impl WatcherState {
                 "SHOW"
             }
             EVENT_OBJECT_DESTROY => {
-                if self.handled.remove(&key) | self.baseline.remove(&key) {
+                let was_handled = self.handled.remove(&key);
+                let was_baseline = self.baseline.remove(&key);
+                if was_handled | was_baseline {
                     self.stats.events_destroy_tracked += 1;
+                }
+                // 线路二：已分组窗口销毁 → 丢弃还原映射（HWND 可能被复用）
+                if was_handled && matches!(self.strategy, WatchStrategy::Group) {
+                    if let Some(map) = self.map.as_mut() {
+                        if map.remove(key) {
+                            let _ = map.save();
+                        }
+                    }
                 }
                 return;
             }
@@ -194,16 +251,49 @@ impl WatcherState {
                 return;
             }
         };
-        if aumid.contains(appid::SUFFIX_MARKER) {
-            // 已带标记（多为上次会话遗留）：视为已处理
-            self.stats.skipped_already_marked += 1;
+        // 双线路互斥标记检查（任务 8）：已带本线路标记 = 已处理；
+        // 带另一线路标记 = 跳过（防止两种改写叠加成不可还原的状态）
+        let marked: Option<&str> = match self.strategy {
+            WatchStrategy::Ungroup => {
+                if aumid.contains(appid::SUFFIX_MARKER) {
+                    Some("already marked (line 1 suffix)")
+                } else if appid::is_group_aumid(&aumid) {
+                    Some("cross-line marker (line 2 group AUMID)")
+                } else {
+                    None
+                }
+            }
+            WatchStrategy::Group => {
+                if appid::is_group_aumid(&aumid) {
+                    Some("already marked (line 2 group AUMID)")
+                } else if aumid.contains(appid::SUFFIX_MARKER) {
+                    Some("cross-line marker (line 1 suffix)")
+                } else {
+                    None
+                }
+            }
+        };
+        if let Some(reason) = marked {
+            if reason.starts_with("cross-line") {
+                self.stats.skipped_cross_line += 1;
+            } else {
+                self.stats.skipped_already_marked += 1;
+            }
             if self.verbose {
-                self.log_skip(name, hwnd, "already marked");
+                self.log_skip(name, hwnd, reason);
             }
             self.handled.insert(key);
             return;
         }
         self.stats.candidates += 1;
+        match self.strategy {
+            WatchStrategy::Ungroup => self.apply_ungroup(name, hwnd, key, aumid),
+            WatchStrategy::Group => self.apply_group(name, hwnd, key, aumid),
+        }
+    }
+
+    /// 线路一：追加每窗口后缀（任务 6 原逻辑）。
+    unsafe fn apply_ungroup(&mut self, name: &str, hwnd: HWND, key: usize, aumid: String) {
         let suffixed = appid::suffixed_aumid(&aumid, hwnd);
         if suffixed.truncated {
             self.stats.truncated += 1;
@@ -234,6 +324,7 @@ impl WatcherState {
                     suffixed.value,
                     t0.elapsed().as_secs_f64() * 1000.0
                 );
+                self.handled.insert(key);
             }
             Err(e) => {
                 self.stats.write_fail += 1;
@@ -245,10 +336,81 @@ impl WatcherState {
                     aumid
                 );
                 // 不进 handled：窗口后续的 SHOW 事件可重试
-                return;
             }
         }
-        self.handled.insert(key);
+    }
+
+    /// 线路二：改写为共享 AUMID（任务 8）。先落盘还原映射，再写属性；
+    /// 映射保存失败则放弃改写（保住还原能力优先于分组生效）。
+    unsafe fn apply_group(&mut self, name: &str, hwnd: HWND, key: usize, aumid: String) {
+        let shared = self.group_value.clone();
+        if self.dry_run {
+            self.stats.dry_run_hits += 1;
+            println!(
+                "{} {} {} [dry-run] aumid={:?} -> {:?} (group)",
+                self.ts(),
+                name,
+                fmt_window(hwnd),
+                winutil::shown_aumid(&aumid),
+                shared
+            );
+            self.handled.insert(key);
+            return;
+        }
+        let Some(map) = self.map.as_mut() else {
+            self.stats.write_fail += 1;
+            println!(
+                "{} {} {} group write FAILED: no restore map loaded",
+                self.ts(),
+                name,
+                fmt_window(hwnd)
+            );
+            return;
+        };
+        map.record(key, &shared, &aumid);
+        if let Err(e) = map.save() {
+            map.remove(key);
+            self.stats.write_fail += 1;
+            println!(
+                "{} {} {} group write FAILED: {e} (AUMID left untouched)",
+                self.ts(),
+                name,
+                fmt_window(hwnd)
+            );
+            return;
+        }
+        let t0 = Instant::now();
+        match appid::set_aumid(hwnd, &shared) {
+            Ok(()) => {
+                self.stats.rewritten += 1;
+                println!(
+                    "{} {} {} aumid={:?} -> {:?} (group, write {:.1}ms)",
+                    self.ts(),
+                    name,
+                    fmt_window(hwnd),
+                    winutil::shown_aumid(&aumid),
+                    shared,
+                    t0.elapsed().as_secs_f64() * 1000.0
+                );
+                self.handled.insert(key);
+            }
+            Err(e) => {
+                // 回滚映射条目：AUMID 未动，条目已作废
+                if let Some(map) = self.map.as_mut() {
+                    map.remove(key);
+                    let _ = map.save();
+                }
+                self.stats.write_fail += 1;
+                println!(
+                    "{} {} {} aumid={:?} group write FAILED: {e}",
+                    self.ts(),
+                    name,
+                    fmt_window(hwnd),
+                    aumid
+                );
+                // 不进 handled：窗口后续的 SHOW 事件可重试
+            }
+        }
     }
 
     fn log_skip(&self, name: &str, hwnd: HWND, reason: &str) {
@@ -261,11 +423,14 @@ impl WatcherState {
     }
 
     /// 退出时的全量复扫与统计输出：
-    /// - 漏检 = 新出现的应用窗口在会话结束时仍无标记；
+    /// - 漏检 = 新出现的应用窗口在会话结束时仍无本线路标记；
     /// - 回退 = 本会话改写过、但标记已消失（应用回写了自身 AUMID 的证据）。
     unsafe fn final_scan_and_report(&mut self) {
         println!();
-        println!("==== watch stats (task 6, docs/plan.md Phase 0b-(6)) ====");
+        println!(
+            "==== watch stats (task 6/8, docs/plan.md Phase 0b, strategy: {}) ====",
+            self.strategy.label()
+        );
         println!(
             "events     : CREATE={} SHOW={} DESTROY(tracked)={}",
             self.stats.events_create, self.stats.events_show, self.stats.events_destroy_tracked
@@ -273,14 +438,15 @@ impl WatcherState {
         println!("baseline app windows at start : {}", self.baseline_count);
         println!("new-window candidates         : {}", self.stats.candidates);
         println!(
-            "skips      : dupe={} baseline={} not_app_window={} shell={} cloaked={} read_fail={} already_marked={}",
+            "skips      : dupe={} baseline={} not_app_window={} shell={} cloaked={} read_fail={} already_marked={} cross_line={}",
             self.stats.skipped_dupe,
             self.stats.skipped_baseline,
             self.stats.skipped_not_app_window,
             self.stats.skipped_shell,
             self.stats.skipped_cloaked,
             self.stats.skipped_read_fail,
-            self.stats.skipped_already_marked
+            self.stats.skipped_already_marked,
+            self.stats.skipped_cross_line
         );
         if self.dry_run {
             println!(
@@ -300,12 +466,17 @@ impl WatcherState {
         let mut reverted: Vec<String> = Vec::new();
         let mut alive_marked: u64 = 0;
         let mut scan_read_fail: u64 = 0;
+        // 本线路的"已标记"判定：线路一认后缀标记，线路二认共享前缀
+        let is_marked = |aumid: &str| match self.strategy {
+            WatchStrategy::Ungroup => aumid.contains(appid::SUFFIX_MARKER),
+            WatchStrategy::Group => appid::is_group_aumid(aumid),
+        };
         for hwnd in winutil::enum_top_level_windows() {
             let key = hwnd.0 as usize;
             let was_handled = self.handled.contains(&key);
             let is_new = !self.baseline.contains(&key);
             if !was_handled && !is_new {
-                // 存量且本会话未处理：与任务 6 无关
+                // 存量且本会话未处理：与本次 watch 无关
                 continue;
             }
             let aumid = match appid::get_aumid(hwnd) {
@@ -315,7 +486,7 @@ impl WatcherState {
                     continue;
                 }
             };
-            if aumid.contains(appid::SUFFIX_MARKER) {
+            if is_marked(&aumid) {
                 alive_marked += 1;
             } else if was_handled {
                 reverted.push(format!("{} aumid={:?}", fmt_window(hwnd), aumid));
@@ -338,6 +509,13 @@ impl WatcherState {
         }
         if scan_read_fail > 0 {
             println!("(scan: {scan_read_fail} windows unreadable)");
+        }
+        if matches!(self.strategy, WatchStrategy::Group) {
+            let remaining = self.map.as_ref().map_or(0, |m| m.len());
+            println!(
+                "restore-map entries alive         : {remaining} ({}, next to exe)",
+                crate::restoremap::MAP_FILE_NAME
+            );
         }
         println!("note: taskbar button races/jumps must be observed manually on real Windows");
     }
@@ -368,10 +546,28 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     // AUMID 读写（IPropertyStore）要求本线程已初始化 COM
     let _com = winutil::ComGuard::init()?;
 
+    // 任务 8：线路二需要共享 AUMID 与还原映射表（exe 同目录）；
+    // 组名在 main 层校验过，这里再算一次具体值；映射表加载失败即中止
+    // （线路二没有还原映射就不该跑）。
+    let (group_value, map) = match opts.strategy {
+        WatchStrategy::Group => {
+            let name = opts.group_name.clone().unwrap_or_default();
+            let value = appid::group_aumid(&name)?;
+            let dir = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                .ok_or_else(|| "watch: cannot locate exe directory for restore map".to_string())?;
+            let map = RestoreMap::load(&dir)?;
+            (value, Some(map))
+        }
+        WatchStrategy::Ungroup => (String::new(), None),
+    };
+    let group_display = group_value.clone(); // 状态创建后仍需打印
+
     // 1. 线程本地状态先行就位（回调里 if-let 判空，绝不 panic）。
     //    注意：基线快照必须在钩子安装之后做，见下方第 3 步。
     WATCHER.with(|cell| {
-        *cell.borrow_mut() = Some(WatcherState::new(opts.dry_run, opts.verbose));
+        *cell.borrow_mut() = Some(WatcherState::new(&opts, group_value, map));
     });
 
     // 2. 安装 winevent 钩子（零注入：WINEVENT_OUTOFCONTEXT 回调只在本进程执行）
@@ -390,7 +586,17 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
         hooks.push(h);
     }
 
-    println!("tbg-lite watch (task 6): SetWinEventHook CREATE/SHOW/DESTROY, out-of-context, skip-own-process");
+    println!("tbg-lite watch (task 6/8): SetWinEventHook CREATE/SHOW/DESTROY, out-of-context, skip-own-process");
+    println!("strategy : {}", opts.strategy.label());
+    if matches!(opts.strategy, WatchStrategy::Group) {
+        println!(
+            "group    : every new candidate window gets the shared AUMID {group_display:?}"
+        );
+        println!(
+            "restore  : originals persisted to {} (next to exe) for `restore`",
+            crate::restoremap::MAP_FILE_NAME
+        );
+    }
     println!("note: DESTROY hook is bookkeeping only (tracked-window cleanup)");
     if opts.duration.is_zero() {
         println!("duration: until Ctrl+C (hard exit, no stats printed)");
