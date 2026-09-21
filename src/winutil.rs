@@ -1,10 +1,11 @@
 //! 窗口与字符串工具（任务 5 起使用）。
 
 use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RPC_E_CHANGED_MODE};
+use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetClassNameW, GetWindowLongW, GetWindowTextW, GetWindowThreadProcessId,
-    IsWindowVisible, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
+    EnumWindows, GetAncestor, GetClassNameW, GetWindowLongW, GetWindowTextW,
+    GetWindowThreadProcessId, IsWindowVisible, GA_ROOT, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
 };
 
 /// 把 API 写入 `buf` 的前 `len` 个 UTF-16 码元转成 `String`。
@@ -73,8 +74,13 @@ pub(crate) unsafe fn window_pid(hwnd: HWND) -> u32 {
     pid
 }
 
-/// 是否像“任务栏上会出现按钮”的应用主窗口：可见 + 有标题 + 非工具窗口。
+/// 是否像“任务栏上会出现按钮”的应用主窗口：顶层 + 可见 + 有标题 + 非工具窗口。
+/// 顶层校验用 GetAncestor(GA_ROOT)：winevent 会为子控件也派发事件，
+/// 必须排除（EnumWindows 枚举路径下该校验是空开销的无损操作）。
 pub(crate) unsafe fn is_app_window(hwnd: HWND) -> bool {
+    if GetAncestor(hwnd, GA_ROOT).0 != hwnd.0 {
+        return false;
+    }
     if !IsWindowVisible(hwnd).as_bool() {
         return false;
     }
@@ -83,6 +89,40 @@ pub(crate) unsafe fn is_app_window(hwnd: HWND) -> bool {
     }
     let ex = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
     ex & WS_EX_TOOLWINDOW.0 == 0
+}
+
+/// shell 自身 UI 窗口的类名（桌面 / 任务栏）。这些窗口永不参与 AUMID 改写
+/// （任务 6：winevent 事件里必须排除，否则会误改桌面/任务栏自身）。
+const SHELL_WINDOW_CLASSES: [&str; 5] = [
+    "Progman",                      // 桌面
+    "WorkerW",                      // 桌面后备工作窗口
+    "Shell_TrayWnd",                // 主任务栏
+    "Shell_SecondaryTrayWnd",       // 副显示器任务栏
+    "XamlExplorerHostIslandWindow", // Win11 任务栏宿主
+];
+
+/// 是否 shell 自身 UI 窗口（桌面/任务栏等）。类名比较不区分大小写
+/// （Win32 窗口类注册本身即不区分大小写）。
+pub(crate) unsafe fn is_shell_window(hwnd: HWND) -> bool {
+    let cls = class_name(hwnd);
+    SHELL_WINDOW_CLASSES
+        .iter()
+        .any(|c| cls.eq_ignore_ascii_case(c))
+}
+
+/// DWM 遮蔽（cloak）检测：被 cloak 的窗口（如挂起的 UWP）当前没有任务栏按钮，
+/// 任务 6 中跳过不处理；查询失败按“未 cloak”处理。
+/// 参考：DWMWA_CLOAKED 返回 DWM_CLOAKED_APP / DWM_CLOAKED_SHELL 标志位。
+pub(crate) unsafe fn is_cloaked(hwnd: HWND) -> bool {
+    let mut cloaked: u32 = 0;
+    let ok = DwmGetWindowAttribute(
+        hwnd,
+        DWMWA_CLOAKED,
+        &mut cloaked as *mut u32 as *mut core::ffi::c_void,
+        std::mem::size_of::<u32>() as u32,
+    )
+    .is_ok();
+    ok && cloaked != 0
 }
 
 unsafe extern "system" fn collect_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {

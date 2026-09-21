@@ -1,13 +1,16 @@
 //! tbg-lite — Windows 任务栏分组控制（零注入路线 B+）
 //!
-//! 当前任务：5（API 语义 PoC）。CLI 提供 `inspect` / `set`，用于在真实
-//! Windows 上手工验证 `SHGetPropertyStoreForWindow` + `PKEY_AppUserModel_ID`
-//! 的读写语义（docs/plan.md §7 Phase 0b）。
+//! 当前任务：5–6（Phase 0b PoC）。CLI 提供 `inspect` / `set` / `watch`：
+//! 任务 5 在真实 Windows 上手工验证 `SHGetPropertyStoreForWindow` +
+//! `PKEY_AppUserModel_ID` 的读写语义；任务 6 用 SetWinEventHook 事件驱动地
+//! 自动改写新窗口 AUMID（docs/plan.md §7 Phase 0b）。
 
 mod appid;
+mod winevent;
 mod winutil;
 
 use std::process::ExitCode;
+use std::time::Duration;
 
 use windows::Win32::Foundation::HWND;
 
@@ -18,6 +21,7 @@ USAGE:
     tbg-lite [--version | --help]
     tbg-lite inspect [--hwnd <HEX>] [--all]
     tbg-lite set --hwnd <HEX> (--suffix | --value <APPID>)
+    tbg-lite watch [--duration <SECS>] [--dry-run] [--verbose]
 
 COMMANDS:
     inspect   list top-level windows and their AppUserModelID
@@ -26,9 +30,16 @@ COMMANDS:
     set       rewrite one window's AppUserModelID (docs/plan.md task 5)
               --suffix       append the per-window ungroup marker (~TBG~w<HWND>)
               --value <ID>   set an exact AppUserModelID
+    watch     event-driven PoC (docs/plan.md task 6): listen for new
+              top-level windows via SetWinEventHook (out-of-context,
+              no injection) and rewrite their AUMID with the per-window
+              suffix; prints stats plus a missed/reverted scan at exit
+              --duration <SECS>  run length (default 60; 0 = until Ctrl+C)
+              --dry-run          log only, never write AUMID
+              --verbose          also log skipped windows with reasons
 
 STATUS:
-    task 5 (API semantics PoC) — see docs/plan.md §7 Phase 0b
+    tasks 5-6 (Phase 0b PoC) — see docs/plan.md §7 Phase 0b
 ";
 
 fn main() -> ExitCode {
@@ -44,6 +55,7 @@ fn main() -> ExitCode {
         }
         Some("inspect") => report(cmd_inspect(&args[1..])),
         Some("set") => report(cmd_set(&args[1..])),
+        Some("watch") => report(cmd_watch(&args[1..])),
         Some(other) => {
             eprintln!("tbg-lite: unknown command '{other}' (see --help)");
             ExitCode::from(2)
@@ -129,6 +141,31 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+fn cmd_watch(args: &[String]) -> Result<(), String> {
+    let mut duration_secs: u64 = 60;
+    let mut dry_run = false;
+    let mut verbose = false;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--duration" => {
+                let v = next_arg(&mut it, "--duration")?;
+                duration_secs = v
+                    .parse()
+                    .map_err(|_| format!("watch: invalid duration '{v}' (expected seconds)"))?;
+            }
+            "--dry-run" => dry_run = true,
+            "--verbose" => verbose = true,
+            other => return Err(format!("watch: unknown argument '{other}'")),
+        }
+    }
+    winevent::run(winevent::WatchOptions {
+        duration: Duration::from_secs(duration_secs),
+        dry_run,
+        verbose,
+    })
+}
+
 fn cmd_set(args: &[String]) -> Result<(), String> {
     let mut hwnd: Option<HWND> = None;
     let mut value: Option<String> = None;
@@ -158,7 +195,14 @@ fn cmd_set(args: &[String]) -> Result<(), String> {
                     appid::SUFFIX_MARKER
                 ));
             }
-            format!("{before}{}{}", appid::SUFFIX_MARKER, winutil::hwnd_hex(hwnd))
+            let s = appid::suffixed_aumid(&before, hwnd);
+            if s.truncated {
+                eprintln!(
+                    "set: warning: original AUMID too long, truncated to {} chars",
+                    s.value.len() - appid::SUFFIX_MARKER.len() - winutil::hwnd_hex(hwnd).len()
+                );
+            }
+            s.value
         } else {
             value.unwrap()
         };
