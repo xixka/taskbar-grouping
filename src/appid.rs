@@ -60,7 +60,9 @@ pub(crate) const GROUP_PREFIX: &str = "TBG.Group.";
 /// 组名限 1..=32 个字符，字符集 [A-Za-z0-9._-]（与 AUMID 习惯一致，
 /// 排除空白与控制字符）；总长恒不超过 11 + 32 = 43 < `AUMID_MAX_LEN`。
 /// 组名不合法时返回 Err（CLI 层据此报错，不做静默修正）。
-pub(crate) fn group_aumid(name: &str) -> Result<String, String> {
+/// 注意：本文件顶部导入了 windows::core::Result（单泛型别名），
+/// 此处需要 std 的双泛型 Result，故用全路径显式限定。
+pub(crate) fn group_aumid(name: &str) -> std::result::Result<String, String> {
     let n = name.chars().count();
     let charset_ok = name
         .chars()
