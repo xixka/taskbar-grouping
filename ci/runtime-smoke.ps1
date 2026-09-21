@@ -73,7 +73,9 @@ function Spawn-Notepads([int]$n) {
     if ($p.HasExited -or $p.MainWindowHandle -eq 0) {
       throw "notepad #$i did not create a main window (is this an interactive session?)"
     }
-    $list += [pscustomobject]@{ Proc = $p; Hwnd = [UInt64]$p.MainWindowHandle }
+    # IntPtr.ToUInt64() works on both Windows PowerShell 5.1 and pwsh 7;
+    # a direct [UInt64] cast of IntPtr throws on pwsh 7 (.NET Core).
+    $list += [pscustomobject]@{ Proc = $p; Hwnd = $p.MainWindowHandle.ToUInt64() }
     Start-Sleep -Milliseconds 400
   }
   return $list
