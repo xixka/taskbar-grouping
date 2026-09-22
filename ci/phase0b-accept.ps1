@@ -152,22 +152,30 @@ function Get-AppWindowList {
   if ($raw.Length -eq 0) { return $list }
   try { $raw | Set-Content (Join-Path $out 'inspect-json-raw.txt') -Encoding UTF8 } catch {}
   $rows = @(ConvertFrom-Json -InputObject $raw)
-  foreach ($w in $rows) {
-    if ($null -eq $w -or $null -eq $w.hwnd) { continue }
-    $t = [string]$w.hwnd
-    if (-not $t.StartsWith('0x')) { continue }
-    $hex = $t.Substring(2)
-    if ($hex -notmatch '^[0-9A-F]+$') {
-      Log "Get-AppWindowList: skipping row with malformed hwnd: '$t'"
-      continue
-    }
-    $list += [pscustomobject]@{
-      Hex   = $hex
-      Hwnd  = [Convert]::ToUInt64($hex, 16)
-      Pid   = $w.pid
-      Class = [string]$w.class
-      Aumid = [string]$w.aumid
-      Title = [string]$w.title
+  foreach ($item in $rows) {
+    # Fix round 2: on this runner's Windows PowerShell 5.1, ConvertFrom-Json
+    # returns the parsed JSON array NESTED inside a single-element wrapper
+    # (observed in runs 35689677042 / 35690197028: every $w.hwnd was the
+    # space-joined enumeration of ALL windows). Flatten one level; both
+    # shapes (plain array / nested wrapper) are handled identically.
+    $candidates = if ($item -is [System.Array]) { $item } else { @($item) }
+    foreach ($w in $candidates) {
+      if ($null -eq $w -or $null -eq $w.hwnd) { continue }
+      $t = [string]$w.hwnd
+      if (-not $t.StartsWith('0x')) { continue }
+      $hex = $t.Substring(2)
+      if ($hex -notmatch '^[0-9A-F]+$') {
+        Log "Get-AppWindowList: skipping row with malformed hwnd: '$t'"
+        continue
+      }
+      $list += [pscustomobject]@{
+        Hex   = $hex
+        Hwnd  = [Convert]::ToUInt64($hex, 16)
+        Pid   = $w.pid
+        Class = [string]$w.class
+        Aumid = [string]$w.aumid
+        Title = [string]$w.title
+      }
     }
   }
   return $list
