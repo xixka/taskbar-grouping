@@ -142,13 +142,25 @@ function Clear-TestWindows {
 
 function Get-AppWindowList {
   $list = @()
-  $rows = @(& $exe inspect --json | ConvertFrom-Json)
+  # Task 25 fix round 1: capture the raw output first and parse the whole
+  # JSON document with -InputObject (avoids PS 5.1 pipeline per-item
+  # binding surprises on native exe output). The raw text is also archived
+  # for diagnosis.
+  $rawLines = & $exe inspect --json
+  if ($LASTEXITCODE -ne 0) { throw "inspect --json exited with code $LASTEXITCODE" }
+  $raw = ($rawLines -join "`n").Trim()
+  if ($raw.Length -eq 0) { return $list }
+  try { $raw | Set-Content (Join-Path $out 'inspect-json-raw.txt') -Encoding UTF8 } catch {}
+  $rows = @(ConvertFrom-Json -InputObject $raw)
   foreach ($w in $rows) {
     if ($null -eq $w -or $null -eq $w.hwnd) { continue }
     $t = [string]$w.hwnd
     if (-not $t.StartsWith('0x')) { continue }
     $hex = $t.Substring(2)
-    if ($hex.Length -eq 0) { continue }
+    if ($hex -notmatch '^[0-9A-F]+$') {
+      Log "Get-AppWindowList: skipping row with malformed hwnd: '$t'"
+      continue
+    }
     $list += [pscustomobject]@{
       Hex   = $hex
       Hwnd  = [Convert]::ToUInt64($hex, 16)
