@@ -24,14 +24,15 @@
 
 use std::cell::RefCell;
 use std::collections::HashSet;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY, EVENT_OBJECT_SHOW, MSG, MWMO_INPUTAVAILABLE,
-    MsgWaitForMultipleObjectsEx, OBJID_WINDOW, PeekMessageW, PM_REMOVE, QS_ALLINPUT,
-    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+    EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY, EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_SHOW, MSG,
+    MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, OBJID_WINDOW, PeekMessageW, PM_REMOVE,
+    QS_ALLINPUT, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
 };
 
 use crate::appid;
@@ -77,6 +78,9 @@ pub(crate) struct WatchOptions {
 struct Stats {
     events_create: u64,
     events_show: u64,
+    /// 任务 24（审计 BUG-04）：NAMECHANGE 事件计数（标题后置窗口的
+    /// 重评估入口）。
+    events_namechange: u64,
     events_destroy_tracked: u64,
     candidates: u64,
     rewritten: u64,
@@ -135,11 +139,16 @@ unsafe extern "system" fn win_event_cb(
     _ideventthread: u32,
     _dwmseventtime: u32,
 ) {
-    WATCHER.with(|cell| {
-        if let Some(state) = cell.borrow_mut().as_mut() {
-            state.on_event(event, hwnd, idobject, idchild);
-        }
-    });
+    // 审计 BUG-10（任务 24）：panic 跨 extern "system" 回调边界是 UB
+    // （debug 构建下；release panic=abort 天然中止，本层不生效）。
+    // catch_unwind 拦截后丢弃该事件，保住进程与后续回调。
+    let _ = catch_unwind(AssertUnwindSafe(|| {
+        WATCHER.with(|cell| {
+            if let Some(state) = cell.borrow_mut().as_mut() {
+                state.on_event(event, hwnd, idobject, idchild);
+            }
+        });
+    }));
 }
 
 impl WatcherState {
@@ -177,9 +186,11 @@ impl WatcherState {
     /// 标记互斥检查都在里面）：非应用窗口不进 handled，若随后真正显示，
     /// SHOW 事件会再评估；已带本线路标记的按已处理计（幂等）；带另一
     /// 线路标记的跳过（互斥红线，任务 8）。
-    unsafe fn startup_sweep(&mut self) {
+    unsafe fn startup_sweep(&mut self) -> Result<(), String> {
         self.in_sweep = true;
-        for hwnd in winutil::enum_top_level_windows() {
+        // 审计 BUG-11（任务 24）：枚举失败上抛——基线为空会导致存量窗口
+        // 在后续事件中被误当新窗口全量重标
+        for hwnd in winutil::enum_top_level_windows()? {
             let key = hwnd.0 as usize;
             self.baseline.insert(key);
             self.consider("SWEEP", hwnd, key);
@@ -192,6 +203,7 @@ impl WatcherState {
             self.stats.startup_sweep_marked,
             self.baseline_count
         );
+        Ok(())
     }
 
     fn on_event(&mut self, event: u32, hwnd: HWND, idobject: i32, idchild: i32) {
@@ -208,6 +220,14 @@ impl WatcherState {
             EVENT_OBJECT_SHOW => {
                 self.stats.events_show += 1;
                 "SHOW"
+            }
+            // 任务 24（审计 BUG-04）：标题/类名后置就绪的窗口（先 SHOW 后
+            // SetWindowText，如部分 Qt/Electron 应用、启动闪屏转主窗）在
+            // CREATE/SHOW 两次评估时都不满足候选条件，此后无事件可再触发。
+            // NAMECHANGE 事件让它们获得重评估机会。
+            EVENT_OBJECT_NAMECHANGE => {
+                self.stats.events_namechange += 1;
+                "NAME"
             }
             EVENT_OBJECT_DESTROY => {
                 let was_handled = self.handled.remove(&key);
@@ -228,8 +248,13 @@ impl WatcherState {
             _ => return,
         };
         if self.handled.contains(&key) {
-            // 已处理过（CREATE 处理后紧随的 SHOW 等）
-            self.stats.skipped_dupe += 1;
+            // 已处理过（CREATE 处理后紧随的 SHOW 等）。NAMECHANGE 例外：
+            // 已处理窗口的标题变化（时钟/进度条类高频）无评估意义，
+            // 静默跳过不计 dupe，避免统计噪声淹没真实重复计数
+            // （任务 24，审计 BUG-13 口径）。
+            if event != EVENT_OBJECT_NAMECHANGE {
+                self.stats.skipped_dupe += 1;
+            }
             return;
         }
         // 任务 13：存量窗口不再整体跳过——启动扫未改写成功的存量窗口
@@ -472,8 +497,8 @@ impl WatcherState {
             self.strategy.label()
         );
         println!(
-            "events     : CREATE={} SHOW={} DESTROY(tracked)={}",
-            self.stats.events_create, self.stats.events_show, self.stats.events_destroy_tracked
+            "events (per event): CREATE={} SHOW={} NAMECHANGE={} DESTROY(tracked)={}",
+            self.stats.events_create, self.stats.events_show, self.stats.events_namechange, self.stats.events_destroy_tracked
         );
         println!(
             "startup sweep (task 13): pre-existing rewritten={} already-marked={}",
@@ -484,8 +509,10 @@ impl WatcherState {
             self.baseline_count
         );
         println!("new-window candidates         : {}", self.stats.candidates);
+        // 审计 BUG-13（任务 24）：注明口径——CREATE/SHOW/NAMECHANGE 与
+        // not_app_window 按"事件"累计（同一窗口多次事件重复计数）
         println!(
-            "skips      : dupe={} not_app_window={} shell={} cloaked={} read_fail={} already_marked={} cross_line={}",
+            "skips (per event) : dupe={} not_app_window={} shell={} cloaked={} read_fail={} already_marked={} cross_line={}",
             self.stats.skipped_dupe,
             self.stats.skipped_not_app_window,
             self.stats.skipped_shell,
@@ -517,7 +544,7 @@ impl WatcherState {
             WatchStrategy::Ungroup => aumid.contains(appid::SUFFIX_MARKER),
             WatchStrategy::Group => appid::is_group_aumid(aumid),
         };
-        for hwnd in winutil::enum_top_level_windows() {
+        for hwnd in winutil::enum_top_level_windows().unwrap_or_default() {
             let key = hwnd.0 as usize;
             let was_handled = self.handled.contains(&key);
             let is_new = !self.baseline.contains(&key);
@@ -597,7 +624,9 @@ mod tests {
     #[test]
     fn clip_marks_truncation() {
         assert_eq!(clip("short", 10), "short");
-        assert_eq!(clip("exactly-10!", 10), "exactly-10!");
+        assert_eq!(clip("0123456789", 10), "0123456789"); // 恰好 10 不截
+        // "exactly-10!" 是 11 字符 → 截为前 9 字符 + '~'
+        assert_eq!(clip("exactly-10!", 10), "exactly-1~");
         assert_eq!(clip("a-bit-too-long-value", 10), "a-bit-too~");
         assert_eq!(clip("中文窗口标题很长", 5), "中文窗口~");
     }
@@ -635,9 +664,15 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
         *cell.borrow_mut() = Some(WatcherState::new(&opts, group_value, map));
     });
 
-    // 2. 安装 winevent 钩子（零注入：WINEVENT_OUTOFCONTEXT 回调只在本进程执行）
+    // 2. 安装 winevent 钩子（零注入：WINEVENT_OUTOFCONTEXT 回调只在本进程执行）。
+    //    任务 24（审计 BUG-04）：+EVENT_OBJECT_NAMECHANGE——标题后置窗口的重评估入口
     let flags = WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS;
-    let events = [EVENT_OBJECT_CREATE, EVENT_OBJECT_SHOW, EVENT_OBJECT_DESTROY];
+    let events = [
+        EVENT_OBJECT_CREATE,
+        EVENT_OBJECT_SHOW,
+        EVENT_OBJECT_NAMECHANGE,
+        EVENT_OBJECT_DESTROY,
+    ];
     let mut hooks: Vec<HWINEVENTHOOK> = Vec::with_capacity(events.len());
     for &ev in &events {
         let h = unsafe { SetWinEventHook(ev, ev, HMODULE::default(), Some(win_event_cb), 0, 0, flags) };
@@ -651,7 +686,7 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
         hooks.push(h);
     }
 
-    println!("tbg-lite watch (task 6/8/13): SetWinEventHook CREATE/SHOW/DESTROY, out-of-context, skip-own-process");
+    println!("tbg-lite watch (task 6/8/13/24): SetWinEventHook CREATE/SHOW/NAMECHANGE/DESTROY, out-of-context, skip-own-process");
     println!("strategy : {}", opts.strategy.label());
     println!("startup  : pre-existing app windows are rewritten at launch (task 13: enabling = ungroup everything)");
     if matches!(opts.strategy, WatchStrategy::Group) {
@@ -680,11 +715,23 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     // 3. 启动扫存量（任务 13）：把已存在的应用窗口也按当前线路改写
     //    （对齐 mod 默认"开启即全量取消分组"）。必须在钩子安装之后执行：
     //    这期间新窗口的事件已能入队，不会两头漏。
-    WATCHER.with(|cell| {
+    //    审计 BUG-11：枚举失败 → 摘钩清理后上抛（基线为空比停跑更危险）。
+    let sweep_result = WATCHER.with(|cell| {
         if let Some(state) = cell.borrow_mut().as_mut() {
-            unsafe { state.startup_sweep() };
+            unsafe { state.startup_sweep() }
+        } else {
+            Ok(())
         }
     });
+    if let Err(e) = sweep_result {
+        for h in &hooks {
+            if !unsafe { UnhookWinEvent(*h).as_bool() } {
+                eprintln!("watch: warning: UnhookWinEvent failed");
+            }
+        }
+        WATCHER.with(|cell| *cell.borrow_mut() = None);
+        return Err(format!("watch: startup sweep failed: {e}"));
+    }
 
     // 4. 消息泵：winevent 回调在 PeekMessage 检索期间由系统调用；
     //    MsgWaitForMultipleObjectsEx 让消息一到就醒来（压测时延观察更真实）
@@ -698,9 +745,14 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
                     break;
                 }
                 let remain = d - now;
-                remain.as_millis().min(u32::MAX as u128) as u32
+                // 审计 BUG-08（任务 24）：封顶 1s——同时覆盖两个边界：
+                // duration > ~49.7 天时 as_millis 会被 cap 成 u32::MAX
+                // （== INFINITE，无输入则永不醒检查时钟）；以及
+                // MWMO_INPUTAVAILABLE 在 PeekMessage 取不走输入状态时的
+                // 理论忙转。每秒醒一次检查 deadline，成本可忽略
+                remain.as_millis().min(1000) as u32
             }
-            None => u32::MAX, // INFINITE
+            None => u32::MAX, // INFINITE（常驻无 deadline，纯等输入）
         };
         unsafe {
             let _ = MsgWaitForMultipleObjectsEx(None, wait_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE);

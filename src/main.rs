@@ -141,7 +141,7 @@ fn cmd_inspect(args: &[String]) -> Result<(), String> {
         "{:<18} {:<7} {:<26} {:<30} {}",
         "HWND", "PID", "CLASS", "AUMID", "TITLE"
     );
-    for hwnd in unsafe { winutil::enum_top_level_windows() } {
+    for hwnd in unsafe { winutil::enum_top_level_windows()? } {
         if !all && !unsafe { winutil::is_app_window(hwnd) } {
             continue;
         }
@@ -254,9 +254,10 @@ fn cmd_restore(args: &[String]) -> Result<(), String> {
     let _com = winutil::ComGuard::init()?;
     unsafe {
         // 无 --hwnd 时全量扫描顶层窗口，逐个还原带标记的窗口
+        // （审计 BUG-11：枚举失败上抛而非空表静默空跑）
         let targets: Vec<HWND> = match hwnd {
             Some(h) => vec![h],
-            None => winutil::enum_top_level_windows(),
+            None => unsafe { winutil::enum_top_level_windows()? },
         };
         // 审计 BUG-12（任务 23）：单窗详情模式只应由 --hwnd 显式指定触发；
         // 原先仅按 targets.len()==1 判定，全系统恰有一个顶层窗口时会误入

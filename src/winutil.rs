@@ -131,12 +131,15 @@ unsafe extern "system" fn collect_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
     BOOL(1)
 }
 
-/// 枚举所有顶层窗口（不过滤）。
-pub(crate) unsafe fn enum_top_level_windows() -> Vec<HWND> {
+/// 枚举所有顶层窗口（不过滤）。审计 BUG-11（任务 24）：EnumWindows 失败
+/// （回调返回 FALSE / 会话异常）不再静默吞掉——空表会让 watch 基线为空、
+/// 存量窗口在后续事件中被误当新窗口全量重标；错误上抛由调用方处置。
+pub(crate) unsafe fn enum_top_level_windows() -> Result<Vec<HWND>, String> {
     let mut out: Vec<HWND> = Vec::new();
     let lparam = LPARAM(&mut out as *mut Vec<HWND> as isize);
-    let _ = EnumWindows(Some(collect_cb), lparam);
-    out
+    EnumWindows(Some(collect_cb), lparam)
+        .map_err(|e| format!("EnumWindows failed: {e}"))?;
+    Ok(out)
 }
 
 /// 解析 HWND 参数（十六进制，可带 0x 前缀）。

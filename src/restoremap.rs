@@ -241,7 +241,7 @@ mod tests {
         m.record(0x30148, "TBG.Group.work", "");
         // take 校验共享值一致（防 HWND 复用误还原）
         assert_eq!(m.take(0x20176, "TBG.Group.work").unwrap(), "Microsoft.Notepad");
-        assert_eq!(m.take(0x20148, "TBG.Group.work").unwrap(), ""); // 原空 → clear 语义
+        assert_eq!(m.take(0x30148, "TBG.Group.work").unwrap(), ""); // 原空 → clear 语义
         assert_eq!(m.take(0x99999, "TBG.Group.work"), None); // 无条目
         // 已 take 的条目不复存在
         assert_eq!(m.take(0x20176, "TBG.Group.work"), None);

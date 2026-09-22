@@ -87,12 +87,13 @@
       restore 映射表加载失败重复读盘修复（BUG-01）；映射表迁
       `%LOCALAPPDATA%\tbg-lite\`（SEC-01，含旧表自动迁移）；Cargo.lock
       入库（SEC-03，22b：CI 生成 → 提交 → build --locked + 新鲜度门禁）。
-- [ ] **任务 23**（P1 标记与输入校验）：`strip_suffix` 后缀 HWND 必须与
+- [x] **任务 23**（P1 标记与输入校验）：`strip_suffix` 后缀 HWND 必须与
       当前窗口一致（BUG-05，彻底排除原生 AUMID 假阳性误剥）；`set --value`
       校验 ≤129 UTF-16 码元、拒控制字符（BUG-07/SEC-05）；长度计量统一
       UTF-16 码元（BUG-06）；restore 单窗详情判定修复（BUG-12）；纯逻辑
-      单元测试入库 + CI `cargo test`（审计 P2-13）。
-- [ ] **任务 24**（P1 watch 健壮性）：`EVENT_OBJECT_NAMECHANGE` 钩子对
+      单元测试入库 + CI `cargo test`（审计 P2-13）。完成：2e281ba +
+      修复 c624f58（windows Result 别名）+ 测试笔误修正（随任务 24 提交）。
+- [x] **任务 24**（P1 watch 健壮性）：`EVENT_OBJECT_NAMECHANGE` 钩子对
       未处理窗口重评估（BUG-04，标题后置窗口漏检）；消息泵 wait_ms 封顶
       1s（BUG-08）；回调 catch_unwind（BUG-10）；`EnumWindows` 错误传播
       （BUG-11）；统计口径注明 per-event（BUG-13）。
