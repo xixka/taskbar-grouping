@@ -87,16 +87,16 @@ COMMANDS:
                              (targets and original values); no property
                              writes, restore map untouched
     install   register per-user autostart (task 19): writes the HKCU Run
-              value "tbg-lite" (no admin rights needed). The registered
+              value 'tbg-lite' (no admin rights needed). The registered
               command is the current exe running `watch` along the chosen
               strategy line with --duration 0 (run until stopped);
               default line = ungroup. Re-running install replaces the
               previous command (no accumulation). Console visibility and
               the resident-host lifecycle are task 20 scope
     uninstall remove the autostart entry; idempotent — reports
-              "not installed" and exits 0 when nothing is registered
+              'not installed' and exits 0 when nothing is registered
     status    one-glance state (task 19): the autostart command (or
-              "not installed"), marked-window counters per strategy line,
+              'not installed'), marked-window counters per strategy line,
               and the restore map (entries / absent / corrupt). Read-only:
               never creates, migrates or rewrites the map
 
