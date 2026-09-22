@@ -11,8 +11,10 @@
 #             missed=0, reverted=0; restore returns every window.
 #   Phase B - line 2 (group), 50-window stress (GATING):
 #             every notepad window carries the exact shared AUMID
-#             TBG.Group.smoke; the restore map holds one entry per window
-#             and is removed after a full restore.
+#             TBG.Group.smoke; the restore map covers every discovered
+#             window one-to-one (task 13 startup sweep may add extra
+#             entries for windows that pre-date the watch, e.g. the
+#             runner's own console) and is removed after a full restore.
 #   Phase C - resident memory (GATING): tbg-lite working set stays under
 #             10 MB while watching (acceptance line: <10 MB).
 #   Phase D - multi-app coverage subset, line 1: notepad/mspaint/cmd
@@ -314,7 +316,14 @@ try {
   Assert (Test-Path $mapPath) 'line2 stress: restore map file created next to the exe'
   $entries = @()
   if (Test-Path $mapPath) { $entries = @(Get-Content $mapPath | Where-Object { $_.Trim().Length -gt 0 }) }
-  Assert ($entries.Count -eq $n) "line2 stress: restore map holds $n entries (got $($entries.Count))"
+  # Task 13: the startup sweep also groups windows that existed before the
+  # watch started (e.g. the runner's console), so the map legitimately holds
+  # MORE than the 50 discovered windows. The precise invariant is one entry
+  # per discovered window; the total is asserted to be at least that.
+  $entryHex = @($entries | ForEach-Object { ($_ -split "`t")[0] })
+  $mapped = @($wins | Where-Object { $entryHex -contains $_.Hex })
+  Assert ($mapped.Count -eq $n) "line2 stress: restore map covers every discovered window ($($mapped.Count)/$n)"
+  Assert ($entries.Count -ge $n) "line2 stress: restore map has >= $n entries (got $($entries.Count); extras are startup-sweep windows)"
   $origByHex = @{}
   foreach ($e in $entries) {
     $f = $e -split "`t"

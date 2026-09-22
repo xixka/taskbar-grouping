@@ -18,7 +18,8 @@ API（`SHGetPropertyStoreForWindow` + `PKEY_AppUserModel_ID`）改写运行中�
 
 两线路标记互斥、`--dry-run` 通用；`restore` 同时覆盖两线路还原路径。
 Phase 0b（任务 5-10）已验收：runtime-smoke 12 项断言 + phase0b-acceptance
-29 项断言全绿（docs/phase0b-acceptance.md），UIA 证实双线路任务栏层效果。
+29 项断言全绿（docs/phase0b-acceptance.md），UIA 证实双线路任务栏层效果；
+任务 13 起 runtime-smoke 扩至 20 项断言（含启动扫存量）。
 据此：非注入 B+ 为主要路线，注入 A 为备用（plan v2 §5，不实现）；
 默认行为 = Disable grouping on the taskbar，无排除列表；后续任务一律
 按 plan v2 §3 任务清单立项。
@@ -28,9 +29,10 @@ Phase 0b（任务 5-10）已验收：runtime-smoke 12 项断言 + phase0b-accept
 - `cargo build --release` —— 唯一经验证的构建命令；提取自
   `.github/workflows/ci.yml`，已由 CI 实际运行通过（windows-latest）。本仓库验收
   门禁 = 该命令在 CI 绿灯。
-- `ci/runtime-smoke.ps1` —— CI 运行时冒烟（任务 9，`runtime-smoke` job）：
-  在 windows-latest 真实会话拉起 notepad 窗口，断言双线路 AUMID 改写/复原
-  （12 项断言已全绿，run 35669840422）；仅由 CI 执行，本地未验证。
+- `ci/runtime-smoke.ps1` —— CI 运行时冒烟（任务 9 + 13，`runtime-smoke` job）：
+  在 windows-latest 真实会话拉起 notepad 窗口，断言双线路 AUMID 改写/复原与
+  任务 13 启动扫存量（Phase 0 线路一 / Phase B 线路二预开窗口断言；
+  20 项断言）；仅由 CI 执行，本地未验证。
 - `ci/phase0b-accept.ps1` —— CI Phase 0b 验收套件（任务 10，
   `phase0b-acceptance` job）：双线路各 50 窗口压测 + 常驻内存 <10MB 判定
   （门禁）；多应用覆盖子集、Edge 回写探针、UIA 任务栏按钮枚举
@@ -47,11 +49,12 @@ Phase 0b（任务 5-10）已验收：runtime-smoke 12 项断言 + phase0b-accept
 - `src/appid.rs` —— AUMID 读写核心（属性存储 API）；线路一/线路二标记
   （`~TBG~w` 后缀 / `TBG.Group.` 共享前缀）
 - `src/winevent.rs` —— `watch` 实现：SetWinEventHook 事件驱动 + 双线路改写
-  （apply_ungroup / apply_group）+ 统计报告
+  （apply_ungroup / apply_group）+ 启动扫存量（任务 13：开启即全量改写，
+  幂等重入/双线路互斥）+ 统计报告
 - `src/restoremap.rs` —— 线路二还原映射表（`tbg-restore.tsv`；防 HWND 复用校验）
 - `src/winutil.rs` —— 窗口/COM/字符串工具（枚举、应用窗口判定、cloak 检测）
-- `ci/runtime-smoke.ps1` —— CI 运行时冒烟脚本（任务 9；双线路 AUMID 断言
-  + 截图/explorer 探针，输出在 ci/out 工件）
+- `ci/runtime-smoke.ps1` —— CI 运行时冒烟脚本（任务 9 + 13；双线路 AUMID 断言
+  + 启动扫存量断言 + 截图/explorer 探针，输出在 ci/out 工件）
 - `ci/phase0b-accept.ps1` —— CI Phase 0b 验收套件（任务 10；50 窗口压测/
   内存/多应用覆盖/Edge 回写探针/UIA 任务栏按钮，输出在 ci/out 工件）
 - `Cargo.toml` —— windows 0.58 依赖 feature 组；体积导向 release profile

@@ -1,14 +1,19 @@
-# ci/runtime-smoke.ps1 - task 9 (docs/plan.md Phase 0b-(9))
+# ci/runtime-smoke.ps1 - task 9 + task 13 (docs/plan.md v2 §3)
 #
 # Runtime smoke test for both strategy lines, executed on a GitHub Actions
 # windows-latest runner, which is a real Windows session. It spawns notepad
 # windows, drives `tbg-lite watch/restore`, and asserts the AUMID values
 # read back from the live windows:
+#   Phase 0 - task 13 startup sweep (line 1, GATING): notepads opened
+#             BEFORE the watch starts must get the per-window suffix too
+#             (enabling the watch = ungroup everything).
 #   Phase A - line 1 (ungroup): every notepad gets a distinct ~TBG~w<HWND>
 #             suffix; restore returns every window to its original AUMID.
-#   Phase B - line 2 (group):  every notepad gets the exact shared AUMID
-#             TBG.Group.smoke; restore uses tbg-restore.tsv and the map
-#             file is cleaned up afterwards.
+#   Phase B - line 2 (group): one notepad is opened BEFORE the watch starts
+#             (task 13: the startup sweep must pull it into the group);
+#             every notepad gets the exact shared AUMID TBG.Group.smoke;
+#             restore uses tbg-restore.tsv and the map file is cleaned up
+#             afterwards.
 #   Phase C - explorer/taskbar feasibility probe (best effort, no
 #             assertions): screenshots only, to see whether a real taskbar
 #             can be hosted in this session.
@@ -164,6 +169,55 @@ $envLines | ForEach-Object { Log $_ }
 $envLines | Set-Content (Join-Path $out 'env.txt') -Encoding UTF8
 & $exe --version | Set-Content (Join-Path $out 'version.txt') -Encoding UTF8
 
+# --------------- phase 0: task 13 startup sweep (line 1, pre-existing)
+try {
+  Log '=== Phase 0: startup sweep of pre-existing windows (line 1, task 13) ==='
+  # Two notepads opened BEFORE the watch starts: the startup sweep must
+  # rewrite them too (default behavior = ungroup everything on enable).
+  $preNotepads = Spawn-Notepads 2
+  Start-Sleep -Seconds 1
+  $watch = Start-Watch @('watch','--duration','10','--strategy','ungroup','--verbose') 'watch-line1-sweep.log'
+  Wait-Watch $watch 60
+  $watchLog = Get-Content (Join-Path $out 'watch-line1-sweep.log') -Raw
+  & $exe inspect --all | Set-Content (Join-Path $out 'inspect-line1-sweep.log') -Encoding UTF8
+
+  $aumids = @()
+  foreach ($w in $preNotepads) { $aumids += (Get-WindowAumid $w.Hwnd) }
+  for ($i = 0; $i -lt $preNotepads.Count; $i++) {
+    Log ("pre-existing notepad #{0} hwnd=0x{1:X} aumid='{2}'" -f ($i+1), $preNotepads[$i].Hwnd, $aumids[$i])
+  }
+  Assert (@($aumids | Where-Object { $_ -cmatch '~TBG~w[0-9A-F]{1,16}$' }).Count -eq 2) 'line1-sweep: both PRE-EXISTING notepads got the per-window suffix'
+  Assert (@($aumids | Select-Object -Unique).Count -eq 2) 'line1-sweep: suffixes are pairwise distinct'
+  if ($watchLog -match 'startup sweep \(task 13\): pre-existing windows rewritten=(\d+)') {
+    Assert ([int]$Matches[1] -ge 2) "line1-sweep: startup sweep rewrote >= 2 windows (stats: $($Matches[1]))"
+  } else {
+    Fail 'line1-sweep: watch log missing the startup-sweep stats line'
+  }
+  Assert ($watchLog -cmatch 'SWEEP 0x[0-9A-F]+') 'line1-sweep: sweep activity visible in the watch log (SWEEP events)'
+  Shot 'desktop-line1-sweep.png'
+
+  # restore and verify originals (original = current value minus the suffix)
+  $expected = @()
+  for ($i = 0; $i -lt $preNotepads.Count; $i++) {
+    $expected += ($aumids[$i] -creplace '~TBG~w[0-9A-F]{1,16}$', '')
+  }
+  $restoreOut = & $exe restore | Out-String
+  $restoreOut | Set-Content (Join-Path $out 'restore-line1-sweep.log') -Encoding UTF8
+  Assert ($LASTEXITCODE -eq 0) 'line1-sweep: restore command exited 0'
+  $after = @()
+  foreach ($w in $preNotepads) { $after += (Get-WindowAumid $w.Hwnd) }
+  $okCount = 0
+  for ($i = 0; $i -lt $preNotepads.Count; $i++) {
+    if ($after[$i] -eq $expected[$i]) { $okCount++ }
+  }
+  Assert ($okCount -eq 2) "line1-sweep: restore returned both pre-existing notepads to their original AUMIDs ($okCount/2)"
+} catch {
+  Fail "phase 0 crashed: $($_.Exception.Message)"
+  Log $_.ScriptStackTrace
+} finally {
+  Clear-TestWindows
+}
+
 # ------------------------------------------------- phase A: line 1 (ungroup)
 try {
   Log '=== Phase A: watch --strategy ungroup (line 1) ==='
@@ -218,9 +272,15 @@ try {
   Log '=== Phase B: watch --strategy group --group smoke (line 2) ==='
   $mapPath = Join-Path (Split-Path $exe -Parent) 'tbg-restore.tsv'
   if (Test-Path $mapPath) { Remove-Item $mapPath -Force }  # start clean
+  # Task 13: one notepad opened BEFORE the watch starts - the startup sweep
+  # must pull it into the shared group and persist its original to the map.
+  $preNotepads = Spawn-Notepads 1
+  $origPre = Get-WindowAumid $preNotepads[0].Hwnd
+  Log ("pre-existing notepad hwnd=0x{0:X} original aumid='{1}'" -f $preNotepads[0].Hwnd, $origPre)
   $watch = Start-Watch @('watch','--duration','25','--strategy','group','--group','smoke','--verbose') 'watch-line2-group.log'
   Start-Sleep -Seconds 2
-  $notepads = Spawn-Notepads 3
+  $newNotepads = Spawn-Notepads 2
+  $notepads = @($preNotepads) + @($newNotepads)
   Wait-Watch $watch 90
   $watchLog = Get-Content (Join-Path $out 'watch-line2-group.log') -Raw
   & $exe inspect --all | Set-Content (Join-Path $out 'inspect-line2.log') -Encoding UTF8
@@ -230,18 +290,25 @@ try {
   for ($i = 0; $i -lt $notepads.Count; $i++) {
     Log ("notepad #{0} hwnd=0x{1:X} aumid='{2}'" -f ($i+1), $notepads[$i].Hwnd, $aumids[$i])
   }
-  Assert (@($aumids | Where-Object { $_ -eq 'TBG.Group.smoke' }).Count -eq 3) 'line2: all 3 notepad windows carry the exact shared AUMID'
+  Assert ((Get-WindowAumid $preNotepads[0].Hwnd) -eq 'TBG.Group.smoke') 'line2-sweep: the PRE-EXISTING notepad was pulled into the shared group at startup'
+  Assert (@($aumids | Where-Object { $_ -eq 'TBG.Group.smoke' }).Count -eq 3) 'line2: all 3 notepad windows (incl. pre-existing) carry the exact shared AUMID'
   Assert (@($aumids | Select-Object -Unique).Count -eq 1) 'line2: one identical AUMID across all windows (single taskbar group)'
 
   # expected originals come from the restore map written next to the exe
   Assert (Test-Path $mapPath) 'line2: restore map file was created next to the exe'
+  $preKey = '{0:X}' -f $preNotepads[0].Hwnd
+  $preMapped = $false
   $origByHwnd = @{}
   if (Test-Path $mapPath) {
     Get-Content $mapPath | ForEach-Object {
       $f = $_ -split "`t"
-      if ($f.Count -ge 3) { $origByHwnd[$f[0]] = $f[2] }
+      if ($f.Count -ge 3) {
+        $origByHwnd[$f[0]] = $f[2]
+        if ($f[0] -eq $preKey) { $preMapped = $true }
+      }
     }
   }
+  Assert $preMapped 'line2-sweep: restore map holds the pre-existing notepad original'
   Shot 'desktop-line2-group.png'
 
   $restoreOut = & $exe restore | Out-String

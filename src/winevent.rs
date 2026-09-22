@@ -13,6 +13,10 @@
 //! EVENT_OBJECT_DESTROY 仅用于簿记（窗口销毁后移出已处理集合并丢弃
 //! 线路二的还原映射条目，防 HWND 复用污染统计与还原）。
 //!
+//! 任务 13（docs/plan.md v2 §3）：启动扫存量窗口——watch 一启动就把
+//! 已存在的应用窗口也按当前线路改写（对齐 Windhawk mod 默认行为
+//! "开启即全量取消分组"），而非只管新窗口；两条线路同等生效。
+//!
 //! 退出时输出统计并全量复扫，给出"漏检 / 被应用回写"数据，对应计划中
 //! "高频连开 50 窗口压测"的观测输入。竞态（先并组后跳变）本身需在
 //! 真实 Windows 上人工观察（运行时行为待 Windows 实测；任务 9 起部分
@@ -80,7 +84,6 @@ struct Stats {
     truncated: u64,
     write_fail: u64,
     skipped_dupe: u64,
-    skipped_baseline: u64,
     skipped_not_app_window: u64,
     skipped_shell: u64,
     skipped_cloaked: u64,
@@ -88,6 +91,11 @@ struct Stats {
     skipped_already_marked: u64,
     /// 带着另一条线路的标记出现（防止两种改写叠加而跳过）。
     skipped_cross_line: u64,
+    /// 任务 13：启动扫存量中改写的存量应用窗口数。
+    startup_sweep_rewritten: u64,
+    /// 任务 13：启动扫存量中已带本线路标记的窗口数（幂等：重复
+    /// watch 不会二次叠加后缀，直接计为已处理）。
+    startup_sweep_marked: u64,
 }
 
 struct WatcherState {
@@ -99,11 +107,16 @@ struct WatcherState {
     /// 线路二的还原映射表（`strategy == Ungroup` 时为 None）。
     map: Option<RestoreMap>,
     started: Instant,
-    /// watch 启动前就存在的应用窗口（存量，不处理、不计漏检）。
+    /// 启动扫存量时刻的全部顶层窗口（含非应用窗口）：供退出复扫区分
+    /// "启动时已存在"与"会话中新出现"（漏检只对后者计数），并继续
+    /// 承担 DESTROY 簿记（任务 13 前仅收录应用窗口且不处理）。
     baseline: HashSet<usize>,
     baseline_count: u64,
-    /// 本会话已处理（改写 / 判定跳过）的新窗口，以 HWND 数值为键。
+    /// 本会话已处理（改写 / 判定跳过）的窗口（含启动扫存量的产出），
+    /// 以 HWND 数值为键。
     handled: HashSet<usize>,
+    /// 正在执行启动扫存量（统计归集用；见 startup_sweep）。
+    in_sweep: bool,
     stats: Stats,
 }
 
@@ -145,6 +158,7 @@ impl WatcherState {
             baseline: HashSet::new(),
             baseline_count: 0,
             handled: HashSet::new(),
+            in_sweep: false,
             stats: Stats::default(),
         }
     }
@@ -153,18 +167,31 @@ impl WatcherState {
         format!("[{:8.3}s]", self.started.elapsed().as_secs_f32())
     }
 
-    /// 启动时刻的存量应用窗口快照（在钩子安装之后取样：这期间新窗口的
-    /// 事件已能入队，随后会在消息泵里照常处理，不会两头漏）。
-    unsafe fn snapshot_baseline(&mut self) {
+    /// 任务 13：启动扫存量窗口。watch 启动时把已存在的应用窗口也按
+    /// 当前线路改写——对齐 mod 默认行为"开启即全量取消分组"，而非只
+    /// 管新窗口（docs/plan.md v2 §3 任务 13）。两条线路同等生效。
+    ///
+    /// 全部顶层窗口仍记入 baseline（含非应用窗口）：供退出复扫区分
+    /// "启动时已存在"与"会话中新出现"，并继续承担 DESTROY 簿记。
+    /// 判定与改写全部复用 consider（应用窗口 / Shell / cloaked / 双线路
+    /// 标记互斥检查都在里面）：非应用窗口不进 handled，若随后真正显示，
+    /// SHOW 事件会再评估；已带本线路标记的按已处理计（幂等）；带另一
+    /// 线路标记的跳过（互斥红线，任务 8）。
+    unsafe fn startup_sweep(&mut self) {
+        self.in_sweep = true;
         for hwnd in winutil::enum_top_level_windows() {
-            if winutil::is_app_window(hwnd)
-                && !winutil::is_shell_window(hwnd)
-                && !winutil::is_cloaked(hwnd)
-            {
-                self.baseline.insert(hwnd.0 as usize);
-            }
+            let key = hwnd.0 as usize;
+            self.baseline.insert(key);
+            self.consider("SWEEP", hwnd, key);
         }
+        self.in_sweep = false;
         self.baseline_count = self.baseline.len() as u64;
+        println!(
+            "startup sweep (task 13): pre-existing windows rewritten={} already-marked={} baseline-top-level={}",
+            self.stats.startup_sweep_rewritten,
+            self.stats.startup_sweep_marked,
+            self.baseline_count
+        );
     }
 
     fn on_event(&mut self, event: u32, hwnd: HWND, idobject: i32, idchild: i32) {
@@ -205,15 +232,10 @@ impl WatcherState {
             self.stats.skipped_dupe += 1;
             return;
         }
-        if self.baseline.contains(&key) {
-            // 存量窗口（含最小化/恢复、重新显示触发的 SHOW）：不处理，
-            // 保证"新开 N 窗口"压测的统计纯净
-            self.stats.skipped_baseline += 1;
-            if self.verbose {
-                self.log_skip(name, hwnd, "baseline window (existed before watch)");
-            }
-            return;
-        }
+        // 任务 13：存量窗口不再整体跳过——启动扫未改写成功的存量窗口
+        // （扫时还不是应用窗口 / 写入失败）在后续 SHOW 事件中重试；
+        // 已成功改写的走上面的 dupe 分支。启动前就正确标记的存量窗口
+        // 在扫存量阶段已按已处理计（幂等）。
         unsafe { self.consider(name, hwnd, key) };
     }
 
@@ -276,6 +298,9 @@ impl WatcherState {
         if let Some(reason) = marked {
             if reason.starts_with("cross-line") {
                 self.stats.skipped_cross_line += 1;
+            } else if self.in_sweep {
+                // 任务 13：启动扫存量遇已带本线路标记 → 幂等，计已处理
+                self.stats.startup_sweep_marked += 1;
             } else {
                 self.stats.skipped_already_marked += 1;
             }
@@ -315,6 +340,9 @@ impl WatcherState {
         match appid::set_aumid(hwnd, &suffixed.value) {
             Ok(()) => {
                 self.stats.rewritten += 1;
+                if self.in_sweep {
+                    self.stats.startup_sweep_rewritten += 1;
+                }
                 println!(
                     "{} {} {} aumid={:?} -> {:?} (write {:.1}ms)",
                     self.ts(),
@@ -383,6 +411,9 @@ impl WatcherState {
         match appid::set_aumid(hwnd, &shared) {
             Ok(()) => {
                 self.stats.rewritten += 1;
+                if self.in_sweep {
+                    self.stats.startup_sweep_rewritten += 1;
+                }
                 println!(
                     "{} {} {} aumid={:?} -> {:?} (group, write {:.1}ms)",
                     self.ts(),
@@ -428,19 +459,25 @@ impl WatcherState {
     unsafe fn final_scan_and_report(&mut self) {
         println!();
         println!(
-            "==== watch stats (task 6/8, docs/plan.md Phase 0b, strategy: {}) ====",
+            "==== watch stats (task 6/8/13, docs/plan.md v2 §3, strategy: {}) ====",
             self.strategy.label()
         );
         println!(
             "events     : CREATE={} SHOW={} DESTROY(tracked)={}",
             self.stats.events_create, self.stats.events_show, self.stats.events_destroy_tracked
         );
-        println!("baseline app windows at start : {}", self.baseline_count);
+        println!(
+            "startup sweep (task 13): pre-existing rewritten={} already-marked={}",
+            self.stats.startup_sweep_rewritten, self.stats.startup_sweep_marked
+        );
+        println!(
+            "baseline top-level windows at start : {}",
+            self.baseline_count
+        );
         println!("new-window candidates         : {}", self.stats.candidates);
         println!(
-            "skips      : dupe={} baseline={} not_app_window={} shell={} cloaked={} read_fail={} already_marked={} cross_line={}",
+            "skips      : dupe={} not_app_window={} shell={} cloaked={} read_fail={} already_marked={} cross_line={}",
             self.stats.skipped_dupe,
-            self.stats.skipped_baseline,
             self.stats.skipped_not_app_window,
             self.stats.skipped_shell,
             self.stats.skipped_cloaked,
@@ -476,7 +513,9 @@ impl WatcherState {
             let was_handled = self.handled.contains(&key);
             let is_new = !self.baseline.contains(&key);
             if !was_handled && !is_new {
-                // 存量且本会话未处理：与本次 watch 无关
+                // 启动时已存在且本会话未处理（启动扫判非应用窗口后一直
+                // 没显示、或写入失败已由 write_fail 统计）：与漏检/回退
+                // 判定无关
                 continue;
             }
             let aumid = match appid::get_aumid(hwnd) {
@@ -565,7 +604,7 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     let group_display = group_value.clone(); // 状态创建后仍需打印
 
     // 1. 线程本地状态先行就位（回调里 if-let 判空，绝不 panic）。
-    //    注意：基线快照必须在钩子安装之后做，见下方第 3 步。
+    //    注意：启动扫存量必须在钩子安装之后做，见下方第 3 步。
     WATCHER.with(|cell| {
         *cell.borrow_mut() = Some(WatcherState::new(&opts, group_value, map));
     });
@@ -586,11 +625,12 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
         hooks.push(h);
     }
 
-    println!("tbg-lite watch (task 6/8): SetWinEventHook CREATE/SHOW/DESTROY, out-of-context, skip-own-process");
+    println!("tbg-lite watch (task 6/8/13): SetWinEventHook CREATE/SHOW/DESTROY, out-of-context, skip-own-process");
     println!("strategy : {}", opts.strategy.label());
+    println!("startup  : pre-existing app windows are rewritten at launch (task 13: enabling = ungroup everything)");
     if matches!(opts.strategy, WatchStrategy::Group) {
         println!(
-            "group    : every new candidate window gets the shared AUMID {group_display:?}"
+            "group    : every candidate window (incl. pre-existing) gets the shared AUMID {group_display:?}"
         );
         println!(
             "restore  : originals persisted to {} (next to exe) for `restore`",
@@ -611,11 +651,12 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     }
     println!();
 
-    // 3. 基线快照：此刻已满足“应用窗口”判定的视为启动前存量（不处理、不计漏检）。
-    //    必须在钩子安装之后取样：这期间新窗口的事件已能入队，不会两头漏。
+    // 3. 启动扫存量（任务 13）：把已存在的应用窗口也按当前线路改写
+    //    （对齐 mod 默认"开启即全量取消分组"）。必须在钩子安装之后执行：
+    //    这期间新窗口的事件已能入队，不会两头漏。
     WATCHER.with(|cell| {
         if let Some(state) = cell.borrow_mut().as_mut() {
-            unsafe { state.snapshot_baseline() };
+            unsafe { state.startup_sweep() };
         }
     });
 

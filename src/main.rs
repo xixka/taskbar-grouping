@@ -1,11 +1,13 @@
 //! tbg-lite — Windows 任务栏分组控制（零注入路线 B+）
 //!
-//! 当前任务：5–8（Phase 0b PoC）。CLI 提供 `inspect` / `set` / `watch` /
-//! `restore`：任务 5 手工验证属性存储 API 读写语义；任务 6 用
+//! 当前任务：5–13（Phase 0b PoC + 默认行为闭环）。CLI 提供 `inspect` / `set` /
+//! `watch` / `restore`：任务 5 手工验证属性存储 API 读写语义；任务 6 用
 //! SetWinEventHook 事件驱动地自动改写新窗口 AUMID；任务 7 剥离后缀
 //! 还原原生分组；任务 8 双线路切换——`watch --strategy ungroup|group`，
 //! 线路一每窗口后缀（取消分组），线路二共享 AUMID（自定义分组，
-//! 原值落盘 tbg-restore.tsv 供还原）（docs/plan.md §7 Phase 0b）。
+//! 原值落盘 tbg-restore.tsv 供还原）；任务 13 启动扫存量窗口——watch
+//! 一启动即把已存在的应用窗口也按线路改写（对齐 mod 默认“开启即全量
+//! 取消分组”）（docs/plan.md v2 §3）。
 
 mod appid;
 mod restoremap;
@@ -35,18 +37,21 @@ COMMANDS:
     set       rewrite one window's AppUserModelID (docs/plan.md task 5)
               --suffix       append the per-window ungroup marker (~TBG~w<HWND>)
               --value <ID>   set an exact AppUserModelID
-    watch     event-driven PoC (docs/plan.md task 6+8): listen for new
-              top-level windows via SetWinEventHook (out-of-context,
-              no injection) and rewrite their AUMID along one of two
-              strategy lines (docs/plan.md §4 route B+):
+    watch     event-driven watch (docs/plan.md task 6+8+13): on start,
+              existing application windows are swept and rewritten along
+              the chosen strategy line (task 13: enabling the watch =
+              ungroup everything, matching the Windhawk mod default);
+              afterwards new top-level windows are handled via
+              SetWinEventHook (out-of-context, no injection):
                 --strategy ungroup   per-window suffix ~TBG~w<HWND>,
                                      every window gets its own taskbar
                                      group (default; disables grouping)
-                --strategy group     rewrite every new candidate window
-                                     to the shared AUMID TBG.Group.<NAME>
-                                     (custom grouping; requires --group;
-                                     originals are persisted to
-                                     tbg-restore.tsv next to the exe)
+                --strategy group     rewrite every candidate window
+                                     (incl. pre-existing) to the shared
+                                     AUMID TBG.Group.<NAME> (custom
+                                     grouping; requires --group; originals
+                                     are persisted to tbg-restore.tsv
+                                     next to the exe)
               --duration <SECS>  run length (default 60; 0 = until Ctrl+C)
               --dry-run          log only, never write AUMID
               --verbose          also log skipped windows with reasons
@@ -59,7 +64,8 @@ COMMANDS:
               --hwnd <HEX>   restore one window; without it, all windows
 
 STATUS:
-    tasks 5-8 (Phase 0b PoC) — see docs/plan.md §7 Phase 0b
+    tasks 5-13 done (Phase 0b PoC + default ungroup-on-enable) —
+    see docs/plan.md v2 §3
 ";
 
 fn main() -> ExitCode {

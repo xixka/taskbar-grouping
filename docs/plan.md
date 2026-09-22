@@ -16,12 +16,13 @@
 4. 需求确认：**开机自启**（Phase 3）与 **.lnk 固定磁贴配套**（Phase 2）纳入路线图；
    **多应用覆盖矩阵**（Phase 1，任务 15）执行——它是"非注入为主"裁决的量化依据。
 
-## §1 现状（截至任务 11）
+## §1 现状（截至任务 13）
 
-- 已完成任务 0–11（每任务一提交，见 git log）：CLI 四命令（`inspect` / `set` /
+- 已完成任务 0–13（每任务一提交，见 git log）：CLI 四命令（`inspect` / `set` /
   `watch` 双线路 / `restore` 双路径）、事件驱动（SetWinEventHook 零注入）、线路二还原
-  映射（`tbg-restore.tsv`，防 HWND 复用）、CI 三 job（`build` 编译门禁 /
-  `runtime-smoke` 12 断言 / `phase0b-acceptance` 29 断言）。
+  映射（`tbg-restore.tsv`，防 HWND 复用）、启动扫存量（任务 13：开启即全量取消
+  分组，对齐 mod 默认）、CI 三 job（`build` 编译门禁 /
+  `runtime-smoke` 20 断言 / `phase0b-acceptance` 30 断言）。
 - 验收关键数据（详见验收报告）：双线路 50 窗口压测 0 漏检 0 回写 0 写失败；UIA 证实
   线路一每窗口独立按钮、线路二 50 窗合并单组、还原回原生；工作集 9.15 MB；explorer
   文件夹窗口会被回写（已知限制）；Edge 改写后短时不回写。
@@ -41,9 +42,11 @@
 
 ### Phase 1 — 默认"取消分组"行为闭环
 
-- [ ] **任务 13**：`watch` 启动扫存量窗口——启动时对已存在的应用窗口补线路一后缀
-      （对齐 mod 默认行为：开启即全量取消分组，而非只管新窗口）。含 CI 断言扩展
-      （runtime-smoke：预开窗口在 watch 启动后被标记）。
+- [x] **任务 13**：`watch` 启动扫存量窗口——启动时对已存在的应用窗口按线路改写
+      （对齐 mod 默认行为：开启即全量取消分组，而非只管新窗口；两条线路同等生效，
+      双线路互斥标记与幂等重入保持）。含 CI 断言扩展（已完成：runtime-smoke
+      新增 Phase 0 线路一预开窗口断言 + Phase B 线路二预开窗口断言，12→20 项；
+      phase0b-accept 映射表断言改为逐窗覆盖，兼容启动扫带来的额外条目）。
 - [ ] **任务 14**：Ctrl+C 优雅退出——安装 console control handler，退出时摘钩子、
       输出统计（当前为强杀无统计）；`--restore-on-exit` 可选参数：退出时自动还原。
 - [ ] **任务 15**：多应用覆盖矩阵真机执行——按验收报告 §5 清单制作模板与记录表
@@ -77,7 +80,7 @@
 | 层面 | 方法 |
 |---|---|
 | 编译门禁 | CI `build`（windows-latest，`cargo build --release`） |
-| 双线路行为回归 | CI `runtime-smoke`（12 断言）+ `phase0b-acceptance`（29 断言），每次 push |
+| 双线路行为回归 | CI `runtime-smoke`（20 断言，含启动扫存量）+ `phase0b-acceptance`（30 断言），每次 push |
 | 固定磁贴联动 | CI 断言（任务 18） |
 | 真机清单 | 竞态感知率、覆盖矩阵全量、长时回写、视觉细节、explorer 重启（验收报告 §5） |
 | 内存/体积 | 验收报告口径；发布前回填 `BENCHMARK.md`（任务 21） |
