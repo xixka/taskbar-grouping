@@ -170,6 +170,25 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_short_passthrough() {
+        assert_eq!(truncate("abc", 5), "abc");
+        assert_eq!(truncate("", 5), "");
+        assert_eq!(truncate("abc", 3), "abc"); // 恰好等长不截
+    }
+
+    #[test]
+    fn truncate_marks_with_tilde() {
+        assert_eq!(truncate("abcdef", 5), "abcd~");
+        // 多字节字符不切半：按字符取，非字节
+        assert_eq!(truncate("中文测试", 3), "中文~");
+    }
+}
+
 fn cmd_watch(args: &[String]) -> Result<(), String> {
     let mut duration_secs: u64 = 60;
     let mut dry_run = false;
@@ -239,7 +258,9 @@ fn cmd_restore(args: &[String]) -> Result<(), String> {
             Some(h) => vec![h],
             None => winutil::enum_top_level_windows(),
         };
-        let single = targets.len() == 1;
+        // 审计 BUG-12（任务 23）：单窗详情模式只应由 --hwnd 显式指定触发；
+        // 原先仅按 targets.len()==1 判定，全系统恰有一个顶层窗口时会误入
+        let single = hwnd.is_some() && targets.len() == 1;
         let mut restored = 0u32;
         let mut cleared = 0u32;
         let mut skipped = 0u32;
@@ -261,7 +282,7 @@ fn cmd_restore(args: &[String]) -> Result<(), String> {
                     continue;
                 }
             };
-            if let Some(original) = appid::strip_suffix(&aumid) {
+            if let Some(original) = appid::strip_suffix(&aumid, *hwnd) {
                 // 线路一：后缀内联还原（任务 7）
                 if original.is_empty() {
                     // 原本无 AUMID：清除属性（VT_EMPTY）
@@ -440,14 +461,24 @@ fn cmd_set(args: &[String]) -> Result<(), String> {
             }
             let s = appid::suffixed_aumid(&before, hwnd);
             if s.truncated {
+                // 审计 BUG-06（任务 23）：警告按字符数计，与 UTF-16 码元
+                // 预算口径分开陈述
+                let kept_chars = s.value.chars().count()
+                    - appid::SUFFIX_MARKER.chars().count()
+                    - winutil::hwnd_hex(hwnd).chars().count();
                 eprintln!(
-                    "set: warning: original AUMID too long, truncated to {} chars",
-                    s.value.len() - appid::SUFFIX_MARKER.len() - winutil::hwnd_hex(hwnd).len()
+                    "set: warning: original AUMID too long, kept {kept_chars} chars (UTF-16 budget {}) ",
+                    appid::AUMID_MAX_LEN - appid::SUFFIX_MARKER.len() - winutil::hwnd_hex(hwnd).len()
                 );
             }
             s.value
         } else {
-            value.unwrap()
+            let v = value.unwrap();
+            // 审计 BUG-07/SEC-05（任务 23）：拦超长与控制字符，防破坏
+            // 属性存储语义与线路二 TSV 还原表
+            appid::validate_aumid_value(&v)
+                .map_err(|e| format!("set: invalid --value: {e}"))?;
+            v
         };
         let t0 = std::time::Instant::now();
         appid::set_aumid(hwnd, &new_id)

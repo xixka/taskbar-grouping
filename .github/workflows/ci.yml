@@ -17,6 +17,11 @@ jobs:
       - name: Build (release)
         run: cargo build --release
 
+      # 任务 23（审计 P2-13）：纯逻辑单元测试（标记构造/剥离、还原表
+      # 往返/损坏拒载、HWND 解析等；dev profile，panic=unwind 可测试）。
+      - name: Unit tests
+        run: cargo test
+
   # 任务 22（审计 SEC-03）：Cargo.lock 入库（可复现构建）。
   # 本 job 生成 lockfile 并上传 artifact；维护者下载后提交入库。
   # 入库后此 job 转为新鲜度门禁（generate-lockfile 后 git diff 必须为空）

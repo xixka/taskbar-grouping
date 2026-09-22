@@ -151,3 +151,56 @@ pub(crate) fn parse_hwnd(s: &str) -> Result<HWND, String> {
 pub(crate) fn hwnd_hex(hwnd: HWND) -> String {
     format!("{:X}", hwnd.0 as usize)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_hwnd_accepts_hex_forms() {
+        // 大写 / 小写 / 0x 前缀 / 裸十六进制
+        let h = parse_hwnd("0x500AC").unwrap();
+        assert_eq!(hwnd_hex(h), "500AC");
+        assert_eq!(hwnd_hex(parse_hwnd("500ac").unwrap()), "500AC");
+        assert_eq!(hwnd_hex(parse_hwnd("0X500AC").unwrap()), "500AC");
+        // 全宽 16 位（窗口句柄典型形态）
+        assert_eq!(
+            hwnd_hex(parse_hwnd("0x00000000010C12A8").unwrap()),
+            "10C12A8"
+        );
+    }
+
+    #[test]
+    fn parse_hwnd_rejects_garbage() {
+        assert!(parse_hwnd("").is_err());
+        assert!(parse_hwnd("zzz").is_err());
+        assert!(parse_hwnd("0x").is_err());
+        assert!(parse_hwnd("123g").is_err()); // 混入非十六进制字符
+    }
+
+    #[test]
+    fn hwnd_hex_is_uppercase_no_prefix() {
+        let h = HWND(0xdeadbeefusize as *mut core::ffi::c_void);
+        assert_eq!(hwnd_hex(h), "DEADBEEF");
+    }
+
+    #[test]
+    fn wide_buf_to_string_basic() {
+        // "hi" 的 UTF-16 码元 + 显式长度 2
+        assert_eq!(wide_buf_to_string(&[0x68, 0x69, 0x00], 2), "hi");
+        // len=0 / 负数 → 空
+        assert_eq!(wide_buf_to_string(&[0x68, 0x69], 0), "");
+        assert_eq!(wide_buf_to_string(&[0x68, 0x69], -1), "");
+        // len 超出 buf：安全截断到 buf 长度
+        assert_eq!(wide_buf_to_string(&[0x41], 5), "A");
+        // 代理对（U+1F600）
+        let s: Vec<u16> = "\u{1F600}".encode_utf16().collect();
+        assert_eq!(wide_buf_to_string(&s, 2), "\u{1F600}");
+    }
+
+    #[test]
+    fn shown_aumid_placeholder() {
+        assert_eq!(shown_aumid(""), "<empty>");
+        assert_eq!(shown_aumid("x"), "x");
+    }
+}

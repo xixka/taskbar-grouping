@@ -218,3 +218,116 @@ fn migrate_legacy(new_path: &Path) -> Result<(), String> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 每个测试独立的临时目录（不引第三方依赖）。
+    fn test_dir(name: &str) -> PathBuf {
+        let d = std::env::temp_dir()
+            .join(format!("tbg-restoremap-test-{}-{name}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(&d).unwrap();
+        d
+    }
+
+    #[test]
+    fn record_take_roundtrip_and_hwnd_reuse_guard() {
+        let dir = test_dir("roundtrip");
+        let mut m = RestoreMap::load(&dir).unwrap();
+        assert!(m.is_empty());
+        m.record(0x20176, "TBG.Group.work", "Microsoft.Notepad");
+        m.record(0x30148, "TBG.Group.work", "");
+        // take 校验共享值一致（防 HWND 复用误还原）
+        assert_eq!(m.take(0x20176, "TBG.Group.work").unwrap(), "Microsoft.Notepad");
+        assert_eq!(m.take(0x20148, "TBG.Group.work").unwrap(), ""); // 原空 → clear 语义
+        assert_eq!(m.take(0x99999, "TBG.Group.work"), None); // 无条目
+        // 已 take 的条目不复存在
+        assert_eq!(m.take(0x20176, "TBG.Group.work"), None);
+        // 共享值不一致（HWND 被复用成别的组）→ 拒绝
+        m.record(0x500AC, "TBG.Group.a", "App.A");
+        assert_eq!(m.take(0x500AC, "TBG.Group.b"), None);
+        assert_eq!(m.take(0x500AC, "TBG.Group.a").unwrap(), "App.A");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn peek_does_not_remove() {
+        let dir = test_dir("peek");
+        let mut m = RestoreMap::load(&dir).unwrap();
+        m.record(0x123, "TBG.Group.work", "Orig");
+        assert_eq!(m.peek(0x123, "TBG.Group.work").unwrap(), "Orig");
+        assert_eq!(m.len(), 1); // peek 不移除
+        assert_eq!(m.peek(0x123, "TBG.Group.other"), None);
+        assert_eq!(m.peek(0x456, "TBG.Group.work"), None);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn save_load_roundtrip_with_header() {
+        let dir = test_dir("roundtrip-file");
+        {
+            let mut m = RestoreMap::load(&dir).unwrap();
+            m.record(0xAB, "TBG.Group.work", "App.1");
+            m.record(0xCD, "TBG.Group.work", ""); // 原空值
+            m.save().unwrap();
+        }
+        // 落盘内容含表头 + 两行 TSV；无 tmp 残留
+        let text = fs::read_to_string(dir.join(MAP_FILE_NAME)).unwrap();
+        assert!(text.starts_with(MAP_HEADER));
+        assert!(text.contains("AB\tTBG.Group.work\tApp.1\n"));
+        assert!(text.contains("CD\tTBG.Group.work\t\n"));
+        assert!(!dir.join(format!("{MAP_FILE_NAME}.tmp")).exists());
+        // 重新载入：条目完整
+        let m2 = RestoreMap::load(&dir).unwrap();
+        assert_eq!(m2.len(), 2);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn empty_save_removes_file() {
+        let dir = test_dir("empty-save");
+        {
+            let mut m = RestoreMap::load(&dir).unwrap();
+            m.record(0x1, "TBG.Group.work", "x");
+            m.save().unwrap();
+        }
+        assert!(dir.join(MAP_FILE_NAME).exists());
+        let mut m = RestoreMap::load(&dir).unwrap();
+        assert!(m.remove(0x1));
+        m.save().unwrap(); // 表空 → 删文件
+        assert!(!dir.join(MAP_FILE_NAME).exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn corrupt_file_rejected_fail_safe() {
+        let dir = test_dir("corrupt");
+        fs::write(dir.join(MAP_FILE_NAME), "not-tsv\n").unwrap();
+        // 损坏表拒载（fail-safe，不静默吞记录）
+        assert!(RestoreMap::load(&dir).is_err());
+        // 半行残文（原子写修复前的典型损伤形态）同样拒载
+        fs::write(dir.join(MAP_FILE_NAME), "# tbg-restore.tsv v1\n20176\tTBG.Group").unwrap();
+        assert!(RestoreMap::load(&dir).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn v0_legacy_headerless_table_still_parses() {
+        let dir = test_dir("v0");
+        fs::write(dir.join(MAP_FILE_NAME), "20176\tTBG.Group.work\tApp.1\n").unwrap();
+        let m = RestoreMap::load(&dir).unwrap();
+        assert_eq!(m.len(), 1);
+        assert_eq!(m.peek(0x20176, "TBG.Group.work").unwrap(), "App.1");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn bad_hwnd_rejected() {
+        let dir = test_dir("badhwnd");
+        fs::write(dir.join(MAP_FILE_NAME), "ZZZZ\tTBG.Group.work\tApp.1\n").unwrap();
+        assert!(RestoreMap::load(&dir).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

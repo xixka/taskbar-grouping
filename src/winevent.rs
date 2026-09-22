@@ -274,11 +274,20 @@ impl WatcherState {
             }
         };
         // 双线路互斥标记检查（任务 8）：已带本线路标记 = 已处理；
-        // 带另一线路标记 = 跳过（防止两种改写叠加成不可还原的状态）
+        // 带另一线路标记 = 跳过（防止两种改写叠加成不可还原的状态）。
+        // 任务 23（审计 BUG-05）：线路一的"已标记"判定走 strip_suffix 严格
+        // 校验（标记 + 合法 hex + hex == 当前窗口 HWND），排除原生 AUMID
+        // 恰含标记形态的假阳性；cross-line 判定保持宽松 contains——那只是
+        // 保守跳过（宁可漏标，不可误叠），方向安全。
         let marked: Option<&str> = match self.strategy {
             WatchStrategy::Ungroup => {
-                if aumid.contains(appid::SUFFIX_MARKER) {
+                if appid::strip_suffix(&aumid, hwnd).is_some() {
                     Some("already marked (line 1 suffix)")
+                } else if aumid.contains(appid::SUFFIX_MARKER) {
+                    // 含标记形态但 hex 与本窗口不符（假阳性 / 异窗残留）：
+                    // 保守跳过，保住 apply_ungroup 的"原值不含标记"前置
+                    // 条件，杜绝双标记叠加
+                    Some("already marked (suffix-like value not written by this tool for this window; skipped to avoid stacking)")
                 } else if appid::is_group_aumid(&aumid) {
                     Some("cross-line marker (line 2 group AUMID)")
                 } else {
@@ -578,6 +587,19 @@ fn clip(s: &str, max: usize) -> String {
         let mut t: String = s.chars().take(max.saturating_sub(1)).collect();
         t.push('~');
         t
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clip;
+
+    #[test]
+    fn clip_marks_truncation() {
+        assert_eq!(clip("short", 10), "short");
+        assert_eq!(clip("exactly-10!", 10), "exactly-10!");
+        assert_eq!(clip("a-bit-too-long-value", 10), "a-bit-too~");
+        assert_eq!(clip("中文窗口标题很长", 5), "中文窗口~");
     }
 }
 

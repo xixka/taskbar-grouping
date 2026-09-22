@@ -84,6 +84,29 @@ pub(crate) fn is_group_aumid(aumid: &str) -> bool {
     }
 }
 
+/// 校验用户经 `set --value` 直接写入的 AUMID 值（任务 23，审计 BUG-07/
+/// SEC-05）：非空、≤129 个 UTF-16 码元（Windows 上限，按码元计）、不含
+/// 控制字符（`\t`/`\r`/`\n` 及其他 <0x20 字符——线路二还原表是 TSV，
+/// 分隔符混入会破坏整表）。与 `group_aumid` 的严格白名单不同，这里保持
+/// 值本身自由（调试用途），只拦破坏性输入。
+pub(crate) fn validate_aumid_value(v: &str) -> Result<(), String> {
+    let units = v.encode_utf16().count();
+    if units == 0 {
+        return Err("value must not be empty".to_string());
+    }
+    if units > AUMID_MAX_LEN {
+        return Err(format!(
+            "value too long ({units} UTF-16 units > limit {AUMID_MAX_LEN})"
+        ));
+    }
+    if v.chars().any(|c| (c as u32) < 0x20) {
+        return Err(
+            "value must not contain control characters (tab / newline / others < U+0020)".to_string(),
+        );
+    }
+    Ok(())
+}
+
 /// `suffixed_aumid` 的返回值。
 pub(crate) struct SuffixedAumid {
     /// 追加后缀后的完整值。
@@ -97,13 +120,17 @@ pub(crate) struct SuffixedAumid {
 /// 前置条件：`original` 不含 `SUFFIX_MARKER`（由调用方保证）。
 /// 总长超过 `AUMID_MAX_LEN` 时截断原值头部，保证后缀完整（值仍唯一）；
 /// 此时会返回 `truncated: true` 供调用方记录。
+/// 长度按 UTF-16 码元计（任务 23，审计 BUG-06：Windows 的 129 上限以
+/// 码元为单位；增补平面字符 1 char = 2 码元，按 chars 计会超限）。
 pub(crate) fn suffixed_aumid(original: &str, hwnd: HWND) -> SuffixedAumid {
     let hex = winutil::hwnd_hex(hwnd);
     let keep = AUMID_MAX_LEN.saturating_sub(SUFFIX_MARKER.len() + hex.len());
-    let truncated = original.chars().count() > keep;
+    let units: Vec<u16> = original.encode_utf16().collect();
+    let truncated = units.len() > keep;
     let head: String = if truncated {
-        // 按字符截断，避免切在多字节字符中间
-        original.chars().take(keep).collect()
+        // 按码元截断；若截在代理对中间，from_utf16_lossy 会把半个代理
+        // 替换为 U+FFFD（截断本就是极端场景，保后缀完整优先）
+        String::from_utf16_lossy(&units[..keep])
     } else {
         original.to_string()
     };
@@ -114,18 +141,123 @@ pub(crate) fn suffixed_aumid(original: &str, hwnd: HWND) -> SuffixedAumid {
 }
 
 /// 解析携带本工具后缀的 AUMID（任务 7）：返回 `Some(原始部分)`。
-/// 仅当标记之后是合法的大写十六进制 HWND 尾巴（1–16 位）时才认定为本
-/// 工具所写，防止误剥其他来源的相似字符串；原始部分为空串表示"原本无
+/// 仅当标记之后是合法的大写十六进制 HWND 尾巴（1–16 位）**且与当前窗口
+/// 的 HWND 一致**时才认定为本工具所写（任务 23，审计 BUG-05：本工具写入
+/// 时永远使用目标窗口自己的 HWND，加一致性校验后，原生 AUMID 恰含
+/// "标记+合法 hex"形态的假阳性无法通过——除非它恰好等于当前窗口 HWND，
+/// 概率可忽略），防止误剥其他来源的相似字符串；原始部分为空串表示"原本无
 /// AUMID，还原时应清除属性"（配合 `clear_aumid`）。
-pub(crate) fn strip_suffix(aumid: &str) -> Option<&str> {
+pub(crate) fn strip_suffix(aumid: &str, hwnd: HWND) -> Option<&str> {
     let pos = aumid.rfind(SUFFIX_MARKER)?;
     let (head, tail) = aumid.split_at(pos);
     let hex = &tail[SUFFIX_MARKER.len()..];
     let hex_ok = (1..=16).contains(&hex.len())
         && hex.bytes().all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b));
-    if hex_ok {
+    if hex_ok && hex == winutil::hwnd_hex(hwnd) {
         Some(head)
     } else {
         None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn hwnd(v: usize) -> HWND {
+        HWND(v as *mut core::ffi::c_void)
+    }
+
+    #[test]
+    fn group_aumid_accepts_valid_names() {
+        assert_eq!(group_aumid("work").unwrap(), "TBG.Group.work");
+        assert_eq!(group_aumid("a.b_c-9").unwrap(), "TBG.Group.a.b_c-9");
+        assert_eq!(group_aumid(&"x".repeat(32)).unwrap(), format!("TBG.Group.{}", "x".repeat(32)));
+    }
+
+    #[test]
+    fn group_aumid_rejects_bad_names() {
+        assert!(group_aumid("").is_err()); // 空
+        assert!(group_aumid(&"x".repeat(33)).is_err()); // 超长
+        assert!(group_aumid("has space").is_err());
+        assert!(group_aumid("中文").is_err()); // 非 ASCII
+        assert!(group_aumid("tab\there").is_err());
+    }
+
+    #[test]
+    fn is_group_aumid_basic() {
+        assert!(is_group_aumid("TBG.Group.work"));
+        assert!(!is_group_aumid("TBG.Group.")); // 前缀后为空不算
+        assert!(!is_group_aumid("Microsoft.Notepad"));
+        assert!(!is_group_aumid(""));
+    }
+
+    #[test]
+    fn suffixed_and_strip_roundtrip() {
+        let h = hwnd(0x20176);
+        let s = suffixed_aumid("Microsoft.Notepad", h);
+        assert!(!s.truncated);
+        assert_eq!(s.value, "Microsoft.Notepad~TBG~w20176");
+        // 剥离必须针对同一窗口（审计 BUG-05）
+        assert_eq!(strip_suffix(&s.value, h), Some("Microsoft.Notepad"));
+        // 同形态但 HWND 不同 → 拒绝剥离
+        assert_eq!(strip_suffix(&s.value, hwnd(0x99999)), None);
+    }
+
+    #[test]
+    fn strip_suffix_rejects_fake_markers() {
+        let h = hwnd(0xABC);
+        // 标记后非十六进制（小写 g）
+        assert_eq!(strip_suffix("app~TBG~wg00", h), None);
+        // 标记后空
+        assert_eq!(strip_suffix("app~TBG~w", h), None);
+        // 超长 hex（17 位）
+        let long = format!("app~TBG~w{}F", "0".repeat(16));
+        assert_eq!(strip_suffix(&long, h), None);
+        // 无标记
+        assert_eq!(strip_suffix("Microsoft.Notepad", h), None);
+        // 合法 hex 但与窗口 HWND 不一致（审计 BUG-05 假阳性场景）
+        assert_eq!(strip_suffix("app~TBG~wABD", h), None);
+    }
+
+    #[test]
+    fn strip_suffix_empty_original_means_clear() {
+        let h = hwnd(0x5AC);
+        let s = suffixed_aumid("", h);
+        assert_eq!(s.value, "~TBG~w5AC");
+        assert_eq!(strip_suffix(&s.value, h), Some(""));
+    }
+
+    #[test]
+    fn suffixed_aumid_truncates_by_utf16_units() {
+        // 审计 BUG-06：按 UTF-16 码元计而非字符（emoji 1 char = 2 码元）
+        let h = hwnd(0xFF);
+        // 4 个 emoji = 8 码元 + 后缀 5+2=7 → keep = 129-7 = 122 不截断
+        let emoji = "\u{1F600}".repeat(4);
+        assert_eq!(emoji.encode_utf16().count(), 8);
+        let s = suffixed_aumid(&emoji, h);
+        assert!(!s.truncated);
+        // 超长输入按码元截断
+        let long = "a".repeat(200);
+        let s2 = suffixed_aumid(&long, h);
+        assert!(s2.truncated);
+        let keep = AUMID_MAX_LEN - SUFFIX_MARKER.len() - 2; // hex "FF" 长度 2
+        assert_eq!(s2.value.encode_utf16().count(), AUMID_MAX_LEN);
+        assert!(s2.value.ends_with("~TBG~wFF"));
+        assert_eq!(&s2.value[..keep], "a".repeat(keep));
+    }
+
+    #[test]
+    fn validate_aumid_value_rules() {
+        assert!(validate_aumid_value("Microsoft.Notepad").is_ok());
+        assert!(validate_aumid_value("").is_err()); // 空
+        assert!(validate_aumid_value("a\tb").is_err()); // 制表
+        assert!(validate_aumid_value("a\nb").is_err()); // 换行
+        assert!(validate_aumid_value("a\u{1}b").is_err()); // 控制字符
+        assert!(validate_aumid_value(&"x".repeat(129)).is_ok()); // 恰好 129 码元
+        assert!(validate_aumid_value(&"x".repeat(130)).is_err()); // 超长
+        // 审计 BUG-06：增补平面字符按 2 码元计
+        assert!(validate_aumid_value(&"\u{1F600}".repeat(65)).is_err()); // 130 码元
+        assert!(validate_aumid_value(&"\u{1F600}".repeat(64)).is_ok()); // 128 码元
     }
 }
