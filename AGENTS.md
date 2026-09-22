@@ -93,6 +93,9 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   （任务 9：运行时冒烟）+ `phase0b-acceptance`（任务 10：Phase 0b 验收）
   四个 job
 - `docs/plan.md` —— 实施计划 v2（§0 决策 / §3 任务清单；提交一一对应任务号）
+- `docs/coverage-matrix.md` —— 多应用覆盖矩阵真机记录表（任务 15 模板：应用 ×
+  线路 × 生效/回写/竞态主表 + 竞态/长时/视觉/explorer 重启四专项 + §8 裁决
+  回填框架；维护者真机填写，结论决定 B+ 是否持续为主）
 - `docs/phase0b-acceptance.md` —— Phase 0b 验收报告（CI 量化证据与真机待验清单）
 - `README.md` —— 对外项目定位
 
