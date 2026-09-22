@@ -14,18 +14,18 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build (release)
-        run: cargo build --release
+      # 任务 22b（审计 SEC-03）：Cargo.lock 已入库，--locked 保证可复现构建
+      - name: Build (release, locked)
+        run: cargo build --release --locked
 
       # 任务 23（审计 P2-13）：纯逻辑单元测试（标记构造/剥离、还原表
       # 往返/损坏拒载、HWND 解析等；dev profile，panic=unwind 可测试）。
       - name: Unit tests
-        run: cargo test
+        run: cargo test --locked
 
-  # 任务 22（审计 SEC-03）：Cargo.lock 入库（可复现构建）。
-  # 本 job 生成 lockfile 并上传 artifact；维护者下载后提交入库。
-  # 入库后此 job 转为新鲜度门禁（generate-lockfile 后 git diff 必须为空）
-  # 并将 build job 切换为 --locked。
+  # 任务 22b（审计 SEC-03）：Cargo.lock 新鲜度门禁。
+  # lockfile 已入库：generate-lockfile 后工作树必须无 diff（依赖变更
+  # 必须连同 Cargo.lock 一起提交），保证 --locked 构建可复现。
   lockfile:
     runs-on: windows-latest
     steps:
@@ -35,16 +35,11 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Generate Cargo.lock
-        run: cargo generate-lockfile
-
-      - name: Upload lockfile artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: cargo-lock
-          path: Cargo.lock
-          if-no-files-found: error
+      - name: Verify Cargo.lock freshness
+        run: |
+          cargo generate-lockfile
+          git diff --exit-code Cargo.lock
+          if ($LASTEXITCODE -ne 0) { throw "Cargo.lock is stale - commit the regenerated lockfile together with Cargo.toml changes" }
 
   # 任务 9（docs/plan.md Phase 0b-(9)）：运行时冒烟。
   # windows-latest Runner 是真实 Windows 会话：拉起 notepad 窗口，
@@ -59,8 +54,8 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build (release)
-        run: cargo build --release
+      - name: Build (release, locked)
+        run: cargo build --release --locked
 
       - name: Runtime smoke (two strategy lines on real windows)
         run: powershell -NoProfile -ExecutionPolicy Bypass -File ci/runtime-smoke.ps1
@@ -87,8 +82,8 @@ jobs:
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build (release)
-        run: cargo build --release
+      - name: Build (release, locked)
+        run: cargo build --release --locked
 
       - name: Phase 0b acceptance (stress / memory / coverage / UIA)
         run: powershell -NoProfile -ExecutionPolicy Bypass -File ci/phase0b-accept.ps1
