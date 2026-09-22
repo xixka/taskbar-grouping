@@ -13,13 +13,19 @@ API（`SHGetPropertyStoreForWindow` + `PKEY_AppUserModel_ID`）改写运行中�
 - 线路一 `--strategy ungroup`（取消分组）：每窗口追加后缀 `~TBG~w<HWND>`，
   每窗口独立成组；
 - 线路二 `--strategy group --group <NAME>`（自定义分组）：候选窗口统一改写为
-  共享 AUMID `TBG.Group.<NAME>`，原值落盘 exe 同目录 `tbg-restore.tsv`，
+  共享 AUMID `TBG.Group.<NAME>`，原值落盘 `%LOCALAPPDATA%\tbg-lite\
+  tbg-restore.tsv`（任务 22 起，原子写 + 表头 v1 + 旧表自动迁移），
   `restore` 据此复原。
 
 两线路标记互斥、`--dry-run` 通用；`restore` 同时覆盖两线路还原路径。
 Phase 0b（任务 5-10）已验收：runtime-smoke 12 项断言 + phase0b-acceptance
 29 项断言全绿（docs/phase0b-acceptance.md），UIA 证实双线路任务栏层效果；
 任务 13 起 runtime-smoke 扩至 20 项断言（含启动扫存量）。
+深度代码审计修复（2026-09-22，任务 22-26/Phase R）：15 项 BUG + 5 项 SEC
+全部闭合——还原表原子写/单实例互斥/迁 %LOCALAPPDATA%（P0）、标记 HWND
+严格校验、NAMECHANGE 重评估、inspect --json、restore --dry-run、
+actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI 门禁。
+详见 docs/plan.md v2 Phase R。
 据此：非注入 B+ 为主要路线，注入 A 为备用（plan v2 §5，不实现）；
 默认行为 = Disable grouping on the taskbar，无排除列表；后续任务一律
 按 plan v2 §3 任务清单立项。
@@ -40,12 +46,16 @@ Phase 0b（任务 5-10）已验收：runtime-smoke 12 项断言 + phase0b-accept
   仅由 CI 执行，本地未验证。
 - 禁止本地执行 cargo 构建/运行（本地无 Rust 工具链，且维护者明确禁止）；一切编译
   验证走 CI。
-- `cargo fmt` / `cargo clippy` / `cargo test` 未配置、未验证 → 见"待确认"。
+- `cargo test`（任务 23 起）：31 项纯逻辑单元测试，纳入 build job 门禁
+  （`cargo test --locked`）；`cargo build --release --locked`（任务 22b 起）。
+- `cargo fmt` / `cargo clippy` 未配置、未验证 → 见"待确认"（需一次性格式
+  化任务，见审计 P2-14）。
 
 ## 目录导览
 
-- `src/main.rs` —— CLI 入口：`inspect` / `set` / `watch`（双线路
-  `--strategy ungroup|group` 切换）/ `restore`（双线路还原）
+- `src/main.rs` —— CLI 入口：`inspect`（含 `--json` 机器可读）/ `set` /
+  `watch`（双线路 `--strategy ungroup|group` 切换）/ `restore`（双线路
+  还原 + `--dry-run` 预览）；panic hook 管道断裂优雅退出；用法错误退出码 2
 - `src/appid.rs` —— AUMID 读写核心（属性存储 API）；线路一/线路二标记
   （`~TBG~w` 后缀 / `TBG.Group.` 共享前缀）
 - `src/winevent.rs` —— `watch` 实现：SetWinEventHook 事件驱动 + 双线路改写
@@ -109,8 +119,8 @@ Phase 0b（任务 5-10）已验收：runtime-smoke 12 项断言 + phase0b-accept
 
 ## 待确认（未验证 / 未定）
 
-- `cargo fmt` / `cargo clippy` / `cargo test` 是否纳入 CI 门禁（当前未配置未验证）
+- `cargo fmt` / `cargo clippy` 是否纳入 CI 门禁（需一次性格式化任务；审计 P2-14）
 - `cargo build`（debug）未验证
-- 发布流程未定（建议默认：暂不发布，后续手动 tag + GitHub Release）
+- 发布流程未定（SEC-04：发布时附 SHA256 + Release attestation，任务 21）
 - LICENSE 未定（建议默认：MIT）
 - 配置文件路径未定（建议默认：exe 同目录 `config.toml`；若引入见 plan v2 §6-2）

@@ -73,7 +73,8 @@
       注销自启，防开机死循环）。
 - [ ] **任务 21**：发布准备——README（与 Windhawk 共存注意）、LICENSE 定稿、
       `BENCHMARK.md`（体积/内存实测回填，对照 plan v1 §6 预算）、tag + GitHub
-      Release 流程。
+      Release 流程。SEC-04 注记：发布物附 SHA256 + GitHub Release
+      attestation（任务栏干预类工具易受 SmartScreen/杀软误报）。
 
 ### Phase R — 审计修复（2026-09-22 深度代码审计，BUG-01..15 / SEC-01..05）
 
@@ -97,19 +98,29 @@
       未处理窗口重评估（BUG-04，标题后置窗口漏检）；消息泵 wait_ms 封顶
       1s（BUG-08）；回调 catch_unwind（BUG-10）；`EnumWindows` 错误传播
       （BUG-11）；统计口径注明 per-event（BUG-13）。
-- [ ] **任务 25**（P1 工具面）：broken pipe panic hook 优雅退出（BUG-09）；
+- [x] **任务 25**（P1 工具面）：broken pipe panic hook 优雅退出（BUG-09）；
       `inspect --json` 机器可读输出 + CI 解析替换（BUG-14 根治）；
       `restore --dry-run` 预览（审计 P1-12）；用法类错误退出码 2（审计
-      P2-16 简版）。
-- [ ] **任务 26**（CI 供应链加固）：actions 钉提交 SHA（SEC-02）；发布
-      物签名/SHA256 流程注记进任务 21（SEC-04）；AGENTS.md 全面同步
-      （单实例红线、映射表新路径、测试门禁）。
+      P2-16 简版）。完成：785fea4 + 修复 880d5b0/10eb70d（PS 5.1
+      ConvertFrom-Json 数组嵌套形态两轮诊断与 flatten，run 35691097252
+      全绿）。
+- [x] **任务 26**（CI 供应链加固）：actions 钉提交 SHA（SEC-02：
+      checkout v4.4.0 / upload-artifact v4.6.2 / rust-toolchain stable）；
+      发布物签名/SHA256 流程注记进任务 21（SEC-04）；AGENTS.md 全面同步
+      （单实例红线、映射表新路径、测试门禁、审计修复落档）。
+
+### Phase R 验收结论（2026-09-22）
+
+审计报告全部 15 项 BUG + 5 项 SEC 闭合：P0（22/22b）、P1（23/24/25）、
+CI 加固（26）全部 CI 绿灯；新增 31 项单元测试纳入 build job 门禁；
+审计 P2 中的工程建议（错误类型化 thiserror、stdout/stderr 分流、
+DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任务演进）。
 
 ## §4 验收与测试（常态化）
 
 | 层面 | 方法 |
 |---|---|
-| 编译门禁 | CI `build`（windows-latest，`cargo build --release`） |
+| 编译门禁 | CI `build`（windows-latest，`cargo build --release --locked` + `cargo test --locked`，任务 22b/23） |
 | 双线路行为回归 | CI `runtime-smoke`（20 断言，含启动扫存量）+ `phase0b-acceptance`（30 断言），每次 push |
 | 固定磁贴联动 | CI 断言（任务 18） |
 | 真机清单 | 竞态感知率、覆盖矩阵全量、长时回写、视觉细节、explorer 重启（验收报告 §5） |

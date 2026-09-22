@@ -9,10 +9,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (audit SEC-02: pinned)
 
       - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (audit SEC-02: pinned)
 
       # 任务 22b（审计 SEC-03）：Cargo.lock 已入库，--locked 保证可复现构建
       - name: Build (release, locked)
@@ -30,10 +30,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (audit SEC-02: pinned)
 
       - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (audit SEC-02: pinned)
 
       - name: Verify Cargo.lock freshness
         run: |
@@ -49,10 +49,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (audit SEC-02: pinned)
 
       - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (audit SEC-02: pinned)
 
       - name: Build (release, locked)
         run: cargo build --release --locked
@@ -62,7 +62,7 @@ jobs:
 
       - name: Upload smoke artifacts (logs + screenshots)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (audit SEC-02: pinned)
         with:
           name: runtime-smoke-artifacts
           path: ci/out
@@ -77,10 +77,10 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (audit SEC-02: pinned)
 
       - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (audit SEC-02: pinned)
 
       - name: Build (release, locked)
         run: cargo build --release --locked
@@ -90,7 +90,7 @@ jobs:
 
       - name: Upload acceptance artifacts (logs + screenshots)
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (audit SEC-02: pinned)
         with:
           name: phase0b-acceptance-artifacts
           path: ci/out

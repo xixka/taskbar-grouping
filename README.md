@@ -6,8 +6,23 @@ It controls taskbar button grouping by rewriting each window's
 `PKEY_AppUserModel_ID` through the documented Shell property-store API
 (`SHGetPropertyStoreForWindow`) — no DLL injection, no shell patching.
 
-- Implementation plan and task breakdown: [`docs/plan.md`](docs/plan.md) (route B+)
-- CI (windows-latest) verifies **compilation only**; runtime behavior must be
-  validated on a real Windows machine.
+Two strategy lines (`watch --strategy`):
 
-Status: early scaffold (task 0).
+- `ungroup` (default) — per-window suffix `~TBG~w<HWND>`; enabling the watch
+  ungroups everything on the taskbar, including windows that already existed
+  at startup (Windhawk-mod-compatible default).
+- `group --group <NAME>` — shared AUMID `TBG.Group.<NAME>` for custom
+  grouping; originals are persisted to `%LOCALAPPDATA%\tbg-lite\tbg-restore.tsv`
+  (atomic writes, single-instance mutex) for `restore`.
+
+CLI: `inspect` (incl. `--json`), `set`, `watch`, `restore` (incl. `--dry-run`).
+
+- Implementation plan and task breakdown: [`docs/plan.md`](docs/plan.md) (route B+, v2)
+- Phase 0b acceptance evidence: [`docs/phase0b-acceptance.md`](docs/phase0b-acceptance.md)
+- CI (windows-latest): `cargo build --release --locked` + unit tests + a
+  20-assertion runtime smoke and a 30-assertion acceptance suite, both running
+  against real windows in the runner session. Taskbar visuals / race
+  perception / multi-app coverage still need real-machine validation.
+
+Status: tasks 0-26 complete (Phase 0b PoC, default ungroup-on-enable,
+audit remediation Phase R); see the task list in `docs/plan.md` v2 §3.
