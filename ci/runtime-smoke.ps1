@@ -352,6 +352,11 @@ try {
 # menu; exit goes through menu option [0] - no Ctrl+C anywhere. Both
 # sessions are driven entirely by pre-written stdin lines (Start-Watch
 # closes the pipe afterwards; menu EOF fallback exits gracefully anyway).
+# NOTE (run 35698563610): the .NET StandardInput StreamWriter emits a UTF-8
+# BOM on its FIRST write, so the first scripted line arrives as "<BOM>4".
+# The menu strips a leading U+FEFF (it is not trim()-whitespace); the
+# first-action assertions below (menu1 '1', menu2 '4') regression-guard
+# that BOM tolerance.
 try {
   Log '=== Phase M: interactive menu, no arguments (task 14) ==='
 

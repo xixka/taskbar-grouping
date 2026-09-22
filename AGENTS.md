@@ -57,8 +57,8 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   仅由 CI 执行，本地未验证。
 - 禁止本地执行 cargo 构建/运行（本地无 Rust 工具链，且维护者明确禁止）；一切编译
   验证走 CI。
-- `cargo test`（任务 23 起）：33 项纯逻辑单元测试（任务 14 增 menu 确认
-  解析 2 项），纳入 build job 门禁
+- `cargo test`（任务 23 起）：35 项纯逻辑单元测试（任务 14 增菜单确认解析
+  与 stdin 首行 BOM 容错 4 项），纳入 build job 门禁
   （`cargo test --locked`）；`cargo build --release --locked`（任务 22b 起）。
 - `cargo fmt` / `cargo clippy` 未配置、未验证 → 见"待确认"（需一次性格式
   化任务，见审计 P2-14）。

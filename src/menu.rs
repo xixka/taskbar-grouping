@@ -13,6 +13,11 @@
 //! `cmd_inspect` / `cmd_restore`（内部各自 ComGuard，逐次调用即可）。
 //! stdin 关闭（EOF / 重定向管道写端关闭）→ 视同选择退出（默认不还原），
 //! 保证脚本化/CI 驱动下不会忙转。
+//!
+//! stdin 首行 UTF-8 BOM 容错：Windows 管道写端（如 PowerShell
+//! `Process.StandardInput` 的 StreamWriter）与记事本保存的脚本文件
+//! 默认在首行前置 U+FEFF；它**不是** Rust `trim()` 语义的空白，须显式
+//! 剥离，否则首条菜单指令被判 unknown（CI run 35698563610 实锤）。
 
 use std::io::{self, Write};
 use std::process::ExitCode;
@@ -68,12 +73,19 @@ fn spawn_watch(strategy: WatchStrategy, group_name: Option<String>) -> WatchSess
     }
 }
 
+/// 剥离行首 UTF-8 BOM（U+FEFF）——它不是 `trim()` 语义的空白，
+/// 必须显式处理；否则管道/脚本驱动的首条菜单指令被判 unknown。
+fn strip_bom(line: &str) -> &str {
+    line.strip_prefix('\u{feff}').unwrap_or(line)
+}
+
 /// 读一行 stdin。`None` = EOF / 读失败（调用方应走优雅退出路径）。
+/// 行首 U+FEFF（BOM）剥离后返回（见 `strip_bom`）。
 fn read_line() -> Option<String> {
     let mut s = String::new();
     match io::stdin().read_line(&mut s) {
         Ok(0) | Err(_) => None,
-        Ok(_) => Some(s),
+        Ok(_) => Some(strip_bom(&s).to_string()),
     }
 }
 
@@ -248,7 +260,7 @@ fn exit_code(restore_failed: bool) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::is_yes;
+    use super::{is_yes, strip_bom};
 
     #[test]
     fn yes_variants() {
@@ -268,5 +280,21 @@ mod tests {
         assert!(!is_yes("no"));
         assert!(!is_yes("ye"));
         assert!(!is_yes("yeah"));
+    }
+
+    #[test]
+    fn bom_prefix_stripped() {
+        // CI run 35698563610 实锤：PS StandardInput 首次写入前置 BOM，
+        // "\u{feff}1" 若不剥离则首条菜单指令判 unknown
+        assert_eq!(strip_bom("\u{feff}1"), "1");
+        assert_eq!(strip_bom("\u{feff}smoke\n"), "smoke\n");
+    }
+
+    #[test]
+    fn bom_absent_passthrough() {
+        assert_eq!(strip_bom("1"), "1");
+        assert_eq!(strip_bom(""), "");
+        // BOM 只在行首剥离，行中出现则保留（不误伤内容）
+        assert_eq!(strip_bom("a\u{feff}b"), "a\u{feff}b");
     }
 }
