@@ -43,3 +43,31 @@ jobs:
           name: runtime-smoke-artifacts
           path: ci/out
           if-no-files-found: warn
+
+  # 任务 10（docs/plan.md v1 §7 Phase 0b 验收）：Phase 0b 验收套件。
+  # 两条线路各 50 窗口压测（门禁断言）、常驻内存 <10MB 判定、多应用
+  # 覆盖子集（notepad/mspaint/cmd 断言、explorer 记录）、Edge/Chromium
+  # 回写探针与 UIA 任务栏按钮枚举（证据性探针，不设门禁）。
+  # 验收结论见 docs/phase0b-acceptance.md。
+  phase0b-acceptance:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build (release)
+        run: cargo build --release
+
+      - name: Phase 0b acceptance (stress / memory / coverage / UIA)
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File ci/phase0b-accept.ps1
+
+      - name: Upload acceptance artifacts (logs + screenshots)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase0b-acceptance-artifacts
+          path: ci/out
+          if-no-files-found: warn

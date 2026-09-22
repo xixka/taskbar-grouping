@@ -29,6 +29,11 @@ plan.md §7 Phase 1-3 原文为路线 A（注入 hook 移植），与本项目�
 - `ci/runtime-smoke.ps1` —— CI 运行时冒烟（任务 9，`runtime-smoke` job）：
   在 windows-latest 真实会话拉起 notepad 窗口，断言双线路 AUMID 改写/复原
   （12 项断言已全绿，run 35669840422）；仅由 CI 执行，本地未验证。
+- `ci/phase0b-accept.ps1` —— CI Phase 0b 验收套件（任务 10，
+  `phase0b-acceptance` job）：双线路各 50 窗口压测 + 常驻内存 <10MB 判定
+  （门禁）；多应用覆盖子集、Edge 回写探针、UIA 任务栏按钮枚举
+  （证据性探针，不设门禁）；结论见 docs/phase0b-acceptance.md；
+  仅由 CI 执行，本地未验证。
 - 禁止本地执行 cargo 构建/运行（本地无 Rust 工具链，且维护者明确禁止）；一切编译
   验证走 CI。
 - `cargo fmt` / `cargo clippy` / `cargo test` 未配置、未验证 → 见"待确认"。
@@ -45,9 +50,12 @@ plan.md §7 Phase 1-3 原文为路线 A（注入 hook 移植），与本项目�
 - `src/winutil.rs` —— 窗口/COM/字符串工具（枚举、应用窗口判定、cloak 检测）
 - `ci/runtime-smoke.ps1` —— CI 运行时冒烟脚本（任务 9；双线路 AUMID 断言
   + 截图/explorer 探针，输出在 ci/out 工件）
+- `ci/phase0b-accept.ps1` —— CI Phase 0b 验收套件（任务 10；50 窗口压测/
+  内存/多应用覆盖/Edge 回写探针/UIA 任务栏按钮，输出在 ci/out 工件）
 - `Cargo.toml` —— windows 0.58 依赖 feature 组；体积导向 release profile
 - `.github/workflows/ci.yml` —— 唯一 CI workflow：`build`（release 编译门禁）
-  + `runtime-smoke`（任务 9：运行时冒烟）两个 job
+  + `runtime-smoke`（任务 9：运行时冒烟）+ `phase0b-acceptance`
+  （任务 10：Phase 0b 验收）三个 job
 - `docs/plan.md` —— 实施计划与任务号（提交一一对应任务号）
 - `README.md` —— 对外项目定位
 
