@@ -89,7 +89,9 @@ pub(crate) fn is_group_aumid(aumid: &str) -> bool {
 /// 控制字符（`\t`/`\r`/`\n` 及其他 <0x20 字符——线路二还原表是 TSV，
 /// 分隔符混入会破坏整表）。与 `group_aumid` 的严格白名单不同，这里保持
 /// 值本身自由（调试用途），只拦破坏性输入。
-pub(crate) fn validate_aumid_value(v: &str) -> Result<(), String> {
+/// 注意：本文件顶部导入了 windows::core::Result（单泛型别名），此处需要
+/// std 的双泛型 Result，故用全路径显式限定（与 group_aumid 同）。
+pub(crate) fn validate_aumid_value(v: &str) -> std::result::Result<(), String> {
     let units = v.encode_utf16().count();
     if units == 0 {
         return Err("value must not be empty".to_string());
