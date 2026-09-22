@@ -11,6 +11,7 @@
 
 mod appid;
 mod restoremap;
+mod singleinstance;
 mod winevent;
 mod winutil;
 
@@ -247,6 +248,10 @@ fn cmd_restore(args: &[String]) -> Result<(), String> {
         // 线路二的还原映射（懒加载：首次遇到共享 AUMID 才读盘）
         let mut map: Option<restoremap::RestoreMap> = None;
         let mut map_loaded = false;
+        // 审计 BUG-02（任务 22）：restore 会改写映射表（take/save），与
+        // `watch --strategy group` 互斥；遇到第一个共享 AUMID 窗口时获取
+        // （纯线路一 restore 不碰表、不参与互斥）。守卫存活至函数返回。
+        let mut map_mutex: Option<singleinstance::MapMutex> = None;
         for hwnd in &targets {
             let aumid = match appid::get_aumid(*hwnd) {
                 Ok(a) => a,
@@ -290,18 +295,31 @@ fn cmd_restore(args: &[String]) -> Result<(), String> {
             } else if appid::is_group_aumid(&aumid) {
                 // 线路二：从还原映射表取原值（任务 8）
                 let key = hwnd.0 as usize;
+                if map_mutex.is_none() {
+                    map_mutex = Some(
+                        singleinstance::MapMutex::acquire()
+                            .map_err(|e| format!("restore: {e}"))?,
+                    );
+                }
                 if !map_loaded {
-                    let dir = std::env::current_exe()
-                        .ok()
-                        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-                        .ok_or_else(|| {
-                            "restore: cannot locate exe directory for restore map".to_string()
-                        })?;
+                    // 审计 SEC-01（任务 22）：映射表位于 %LOCALAPPDATA%\tbg-lite
+                    let dir = match restoremap::data_dir() {
+                        Ok(d) => d,
+                        Err(e) => {
+                            failed += 1;
+                            println!("restore map dir unavailable: {e}");
+                            map_loaded = true; // 审计 BUG-01：一次性标记，不逐窗口重试
+                            continue;
+                        }
+                    };
                     match restoremap::RestoreMap::load(&dir) {
                         Ok(m) => map = Some(m),
                         Err(e) => {
                             failed += 1;
                             println!("0x{} restore map load FAILED: {e}", winutil::hwnd_hex(*hwnd));
+                            // 审计 BUG-01（任务 22）：失败也置位——否则每个共享
+                            // AUMID 窗口都会重复读盘并把 failed 虚增 N 次
+                            map_loaded = true;
                             continue;
                         }
                     }

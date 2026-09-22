@@ -270,7 +270,8 @@ try {
 # -------------------------------------------------- phase B: line 2 (group)
 try {
   Log '=== Phase B: watch --strategy group --group smoke (line 2) ==='
-  $mapPath = Join-Path (Split-Path $exe -Parent) 'tbg-restore.tsv'
+  # Task 22 (audit SEC-01): the restore map lives in %LOCALAPPDATA%\tbg-lite
+  $mapPath = Join-Path $env:LOCALAPPDATA 'tbg-lite\tbg-restore.tsv'
   if (Test-Path $mapPath) { Remove-Item $mapPath -Force }  # start clean
   # Task 13: one notepad opened BEFORE the watch starts - the startup sweep
   # must pull it into the shared group and persist its original to the map.

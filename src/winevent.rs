@@ -552,7 +552,7 @@ impl WatcherState {
         if matches!(self.strategy, WatchStrategy::Group) {
             let remaining = self.map.as_ref().map_or(0, |m| m.len());
             println!(
-                "restore-map entries alive         : {remaining} ({}, next to exe)",
+                "restore-map entries alive         : {remaining} ({}, %LOCALAPPDATA%\\tbg-lite)",
                 crate::restoremap::MAP_FILE_NAME
             );
         }
@@ -585,17 +585,21 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     // AUMID 读写（IPropertyStore）要求本线程已初始化 COM
     let _com = winutil::ComGuard::init()?;
 
-    // 任务 8：线路二需要共享 AUMID 与还原映射表（exe 同目录）；
-    // 组名在 main 层校验过，这里再算一次具体值；映射表加载失败即中止
-    // （线路二没有还原映射就不该跑）。
+    // 审计 BUG-02（任务 22）：线路二会写映射表，全程持有映射表互斥
+    // （守卫存活至 run 返回，与 restore 互斥）；获取失败即拒绝启动。
+    let _map_mutex = match opts.strategy {
+        WatchStrategy::Group => Some(crate::singleinstance::MapMutex::acquire()?),
+        WatchStrategy::Ungroup => None,
+    };
+
+    // 任务 8：线路二需要共享 AUMID 与还原映射表；组名在 main 层校验过，
+    // 这里再算一次具体值；映射表加载失败即中止（线路二没有还原映射就
+    // 不该跑）。审计 SEC-01（任务 22）：表位于 %LOCALAPPDATA%\tbg-lite。
     let (group_value, map) = match opts.strategy {
         WatchStrategy::Group => {
             let name = opts.group_name.clone().unwrap_or_default();
             let value = appid::group_aumid(&name)?;
-            let dir = std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-                .ok_or_else(|| "watch: cannot locate exe directory for restore map".to_string())?;
+            let dir = crate::restoremap::data_dir()?;
             let map = RestoreMap::load(&dir)?;
             (value, Some(map))
         }
@@ -633,7 +637,7 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
             "group    : every candidate window (incl. pre-existing) gets the shared AUMID {group_display:?}"
         );
         println!(
-            "restore  : originals persisted to {} (next to exe) for `restore`",
+            "restore  : originals persisted to {} (in %LOCALAPPDATA%\\tbg-lite) for `restore`",
             crate::restoremap::MAP_FILE_NAME
         );
     }

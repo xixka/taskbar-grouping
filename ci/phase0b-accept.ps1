@@ -232,7 +232,8 @@ $envLines | ForEach-Object { Log $_ }
 $envLines | Set-Content (Join-Path $out 'env.txt') -Encoding UTF8
 & $exe --version | Set-Content (Join-Path $out 'version.txt') -Encoding UTF8
 
-$mapPath = Join-Path (Split-Path $exe -Parent) 'tbg-restore.tsv'
+# Task 22 (audit SEC-01): the restore map lives in %LOCALAPPDATA%\tbg-lite
+$mapPath = Join-Path $env:LOCALAPPDATA 'tbg-lite\tbg-restore.tsv'
 if (Test-Path $mapPath) { Remove-Item $mapPath -Force }   # start clean
 
 # --------------------------- Phase A: line 1 (ungroup) 50-window stress ----

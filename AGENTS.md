@@ -51,7 +51,11 @@ Phase 0b（任务 5-10）已验收：runtime-smoke 12 项断言 + phase0b-accept
 - `src/winevent.rs` —— `watch` 实现：SetWinEventHook 事件驱动 + 双线路改写
   （apply_ungroup / apply_group）+ 启动扫存量（任务 13：开启即全量改写，
   幂等重入/双线路互斥）+ 统计报告
-- `src/restoremap.rs` —— 线路二还原映射表（`tbg-restore.tsv`；防 HWND 复用校验）
+- `src/restoremap.rs` —— 线路二还原映射表（`%LOCALAPPDATA%\tbg-lite\
+  tbg-restore.tsv`，任务 22 起；原子写 tmp+fsync+rename、表头 v1、旧表
+  自动迁移；防 HWND 复用校验）
+- `src/singleinstance.rs` —— 映射表单实例互斥（任务 22：
+  `Local\tbg-lite.map` 命名互斥体，审计 BUG-02）
 - `src/winutil.rs` —— 窗口/COM/字符串工具（枚举、应用窗口判定、cloak 检测）
 - `ci/runtime-smoke.ps1` —— CI 运行时冒烟脚本（任务 9 + 13；双线路 AUMID 断言
   + 启动扫存量断言 + 截图/explorer 探针，输出在 ci/out 工件）
@@ -59,8 +63,9 @@ Phase 0b（任务 5-10）已验收：runtime-smoke 12 项断言 + phase0b-accept
   内存/多应用覆盖/Edge 回写探针/UIA 任务栏按钮，输出在 ci/out 工件）
 - `Cargo.toml` —— windows 0.58 依赖 feature 组；体积导向 release profile
 - `.github/workflows/ci.yml` —— 唯一 CI workflow：`build`（release 编译门禁）
-  + `runtime-smoke`（任务 9：运行时冒烟）+ `phase0b-acceptance`
-  （任务 10：Phase 0b 验收）三个 job
+  + `lockfile`（任务 22：Cargo.lock 生成/新鲜度门禁）+ `runtime-smoke`
+  （任务 9：运行时冒烟）+ `phase0b-acceptance`（任务 10：Phase 0b 验收）
+  四个 job
 - `docs/plan.md` —— 实施计划 v2（§0 决策 / §3 任务清单；提交一一对应任务号）
 - `docs/phase0b-acceptance.md` —— Phase 0b 验收报告（CI 量化证据与真机待验清单）
 - `README.md` —— 对外项目定位
@@ -86,6 +91,10 @@ Phase 0b（任务 5-10）已验收：runtime-smoke 12 项断言 + phase0b-accept
 - 双线路同等维护（2026-09-22 增补）：线路一/线路二同步演进，任何 watch/
   restore 行为改动须同时验证两线路（runtime-smoke 两个 Phase 均须保持
   绿灯）；禁止只修/只留一条线路。
+- 映射表单实例（2026-09-22 任务 22 增补，审计 BUG-02）：任何会写
+  `tbg-restore.tsv` 的进程必须持有 `Local\tbg-lite.map` 互斥体
+  （`src/singleinstance.rs`）；新增写表代码路径必须先 acquire；禁止
+  移除或绕过互斥（last-writer-wins 会丢失用户窗口原值）。
 
 ## 条件路由
 

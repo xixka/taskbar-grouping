@@ -75,6 +75,35 @@
       `BENCHMARK.md`（体积/内存实测回填，对照 plan v1 §6 预算）、tag + GitHub
       Release 流程。
 
+### Phase R — 审计修复（2026-09-22 深度代码审计，BUG-01..15 / SEC-01..05）
+
+> 审计报告（外部，2026-09-22，基线 4d96ff1）结论：总体 B+，无 Critical 级安全
+> 漏洞；风险集中在还原映射表的数据完整性与长驻可靠性。任务 13 已闭合其中
+> "存量窗口不重标"缺口；下列任务按 P0→P1→P2 顺序消化全部审计发现。
+
+- [ ] **任务 22**（P0 数据安全）：映射表原子写（tmp+fsync+rename，BUG-03）
+      + 表头 magic v1；单实例互斥 `Local\tbg-lite.map`（CreateMutexW，
+      BUG-02，watch group 全程 + restore 处理共享窗口期间持锁）；
+      restore 映射表加载失败重复读盘修复（BUG-01）；映射表迁
+      `%LOCALAPPDATA%\tbg-lite\`（SEC-01，含旧表自动迁移）；Cargo.lock
+      入库（SEC-03，22b：CI 生成 → 提交 → build --locked + 新鲜度门禁）。
+- [ ] **任务 23**（P1 标记与输入校验）：`strip_suffix` 后缀 HWND 必须与
+      当前窗口一致（BUG-05，彻底排除原生 AUMID 假阳性误剥）；`set --value`
+      校验 ≤129 UTF-16 码元、拒控制字符（BUG-07/SEC-05）；长度计量统一
+      UTF-16 码元（BUG-06）；restore 单窗详情判定修复（BUG-12）；纯逻辑
+      单元测试入库 + CI `cargo test`（审计 P2-13）。
+- [ ] **任务 24**（P1 watch 健壮性）：`EVENT_OBJECT_NAMECHANGE` 钩子对
+      未处理窗口重评估（BUG-04，标题后置窗口漏检）；消息泵 wait_ms 封顶
+      1s（BUG-08）；回调 catch_unwind（BUG-10）；`EnumWindows` 错误传播
+      （BUG-11）；统计口径注明 per-event（BUG-13）。
+- [ ] **任务 25**（P1 工具面）：broken pipe panic hook 优雅退出（BUG-09）；
+      `inspect --json` 机器可读输出 + CI 解析替换（BUG-14 根治）；
+      `restore --dry-run` 预览（审计 P1-12）；用法类错误退出码 2（审计
+      P2-16 简版）。
+- [ ] **任务 26**（CI 供应链加固）：actions 钉提交 SHA（SEC-02）；发布
+      物签名/SHA256 流程注记进任务 21（SEC-04）；AGENTS.md 全面同步
+      （单实例红线、映射表新路径、测试门禁）。
+
 ## §4 验收与测试（常态化）
 
 | 层面 | 方法 |

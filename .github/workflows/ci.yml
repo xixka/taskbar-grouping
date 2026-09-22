@@ -17,6 +17,30 @@ jobs:
       - name: Build (release)
         run: cargo build --release
 
+  # 任务 22（审计 SEC-03）：Cargo.lock 入库（可复现构建）。
+  # 本 job 生成 lockfile 并上传 artifact；维护者下载后提交入库。
+  # 入库后此 job 转为新鲜度门禁（generate-lockfile 后 git diff 必须为空）
+  # 并将 build job 切换为 --locked。
+  lockfile:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate Cargo.lock
+        run: cargo generate-lockfile
+
+      - name: Upload lockfile artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-lock
+          path: Cargo.lock
+          if-no-files-found: error
+
   # 任务 9（docs/plan.md Phase 0b-(9)）：运行时冒烟。
   # windows-latest Runner 是真实 Windows 会话：拉起 notepad 窗口，
   # 对两条线路的 AUMID 改写/复原做断言（ci/runtime-smoke.ps1），
