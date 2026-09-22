@@ -15,14 +15,22 @@
    （每窗口后缀）为默认策略；**不做排除列表**。
 4. 需求确认：**开机自启**（Phase 3）与 **.lnk 固定磁贴配套**（Phase 2）纳入路线图；
    **多应用覆盖矩阵**（Phase 1，任务 15）执行——它是"非注入为主"裁决的量化依据。
+5. **交互菜单取代 Ctrl+C**（2026-09-22 维护者指示，任务 14 改版）：无参数启动
+   `tbg-lite` 进入交互菜单（启动/停止双线路 watch、还原、inspect、**退出项**）；
+   **不需要 Ctrl+C**——退出走菜单 `[0]`（优雅停止 watch：摘钩 + 统计输出，
+   可选先还原）；带参数启动 = CLI 行为不变。原任务的 Ctrl+C console
+   control handler 与 `--restore-on-exit` 参数方案作废。
 
-## §1 现状（截至任务 13）
+## §1 现状（截至任务 14，含 Phase R 22-26）
 
-- 已完成任务 0–13（每任务一提交，见 git log）：CLI 四命令（`inspect` / `set` /
-  `watch` 双线路 / `restore` 双路径）、事件驱动（SetWinEventHook 零注入）、线路二还原
-  映射（`tbg-restore.tsv`，防 HWND 复用）、启动扫存量（任务 13：开启即全量取消
-  分组，对齐 mod 默认）、CI 三 job（`build` 编译门禁 /
-  `runtime-smoke` 20 断言 / `phase0b-acceptance` 30 断言）。
+- 已完成任务 0–14 与审计修复 22–26（每任务一提交，见 git log）：CLI 四命令
+  （`inspect` / `set` / `watch` 双线路 / `restore` 双路径）、事件驱动
+  （SetWinEventHook 零注入）、线路二还原映射（`tbg-restore.tsv`，防 HWND
+  复用）、启动扫存量（任务 13：开启即全量取消分组，对齐 mod 默认）、无参数
+  交互菜单（任务 14：菜单启动/停止 watch、还原、inspect、退出，无需
+  Ctrl+C）、审计修复（原子写/单实例/标记严格校验/钉 SHA 等）；CI 四 job
+  （`build` 编译+单测门禁 / `lockfile` 新鲜度 / `runtime-smoke` 33 断言 /
+  `phase0b-acceptance` 30 断言）。
 - 验收关键数据（详见验收报告）：双线路 50 窗口压测 0 漏检 0 回写 0 写失败；UIA 证实
   线路一每窗口独立按钮、线路二 50 窗合并单组、还原回原生；工作集 9.15 MB；explorer
   文件夹窗口会被回写（已知限制）；Edge 改写后短时不回写。
@@ -47,8 +55,15 @@
       双线路互斥标记与幂等重入保持）。含 CI 断言扩展（已完成：runtime-smoke
       新增 Phase 0 线路一预开窗口断言 + Phase B 线路二预开窗口断言，12→20 项；
       phase0b-accept 映射表断言改为逐窗覆盖，兼容启动扫带来的额外条目）。
-- [ ] **任务 14**：Ctrl+C 优雅退出——安装 console control handler，退出时摘钩子、
-      输出统计（当前为强杀无统计）；`--restore-on-exit` 可选参数：退出时自动还原。
+- [x] **任务 14**：无参数启动 → 交互菜单模式（2026-09-22 维护者改版，取代
+      原 Ctrl+C console control handler 方案）：`[1]`/`[2]` 启动线路一/线路二
+      watch（后台线程 + `Arc<AtomicBool>` 停止标志，`[2]` 交互输组名）、`[3]`
+      优雅停止（摘钩 + 终扫 + 统计）、`[4]` 还原（确认后复用 `restore` 逻辑）、
+      `[5]` inspect、`[0]` 退出（watch 运行中先询问是否还原；stdin EOF 同样
+      优雅退出，防脚本驱动忙转）；带参数启动 → CLI 行为不变。CI
+      runtime-smoke 新增 Phase M 双会话（stdin 预写驱动菜单：启动扫存量、
+      优雅停表统计、退出保留改写、菜单还原、组名输入、映射表落盘与清理），
+      断言 20→33 项。
 - [ ] **任务 15**：多应用覆盖矩阵真机执行——按验收报告 §5 清单制作模板与记录表
       （`docs/coverage-matrix.md`：应用 × 线路 × 生效/回写/竞态），维护者真机填写；
       结论回填裁决"B+ 是否持续为主"。
@@ -121,7 +136,7 @@ DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任
 | 层面 | 方法 |
 |---|---|
 | 编译门禁 | CI `build`（windows-latest，`cargo build --release --locked` + `cargo test --locked`，任务 22b/23） |
-| 双线路行为回归 | CI `runtime-smoke`（20 断言，含启动扫存量）+ `phase0b-acceptance`（30 断言），每次 push |
+| 双线路行为回归 | CI `runtime-smoke`（33 断言，含启动扫存量与交互菜单）+ `phase0b-acceptance`（30 断言），每次 push |
 | 固定磁贴联动 | CI 断言（任务 18） |
 | 真机清单 | 竞态感知率、覆盖矩阵全量、长时回写、视觉细节、explorer 重启（验收报告 §5） |
 | 内存/体积 | 验收报告口径；发布前回填 `BENCHMARK.md`（任务 21） |

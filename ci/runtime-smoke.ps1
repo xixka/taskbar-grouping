@@ -1,4 +1,4 @@
-# ci/runtime-smoke.ps1 - task 9 + task 13 (docs/plan.md v2 §3)
+# ci/runtime-smoke.ps1 - task 9 + task 13 + task 14 (docs/plan.md v2 §3)
 #
 # Runtime smoke test for both strategy lines, executed on a GitHub Actions
 # windows-latest runner, which is a real Windows session. It spawns notepad
@@ -14,6 +14,12 @@
 #             every notepad gets the exact shared AUMID TBG.Group.smoke;
 #             restore uses tbg-restore.tsv and the map file is cleaned up
 #             afterwards.
+#   Phase M - task 14 interactive menu (no arguments): two menu sessions
+#             driven entirely by pre-written stdin lines — M1 starts the
+#             ungroup watch from the menu, inspects, exits WITHOUT restore
+#             (graceful stop: stats printed, rewrites kept); M2 restores
+#             from the menu, starts a group watch (name via prompt), stops
+#             it, exits. No Ctrl+C involved anywhere.
 #   Phase C - explorer/taskbar feasibility probe (best effort, no
 #             assertions): screenshots only, to see whether a real taskbar
 #             can be hosted in this session.
@@ -89,7 +95,7 @@ function Clear-TestWindows {
   Get-Process -Name 'tbg-lite' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 
-function Start-Watch([string[]]$watchArgs, [string]$logName) {
+function Start-Watch([string[]]$watchArgs, [string]$logName, [string[]]$StdinLines) {
   $logPath = Join-Path $out $logName
   $errPath = Join-Path $out ($logName -replace '\.log$', '.err.log')
   # Round 4: Start-Process -PassThru proved unreliable on the runner - the
@@ -101,6 +107,9 @@ function Start-Watch([string[]]$watchArgs, [string]$logName) {
   # WaitForExit() in Wait-Watch is documented to guarantee a readable
   # ExitCode. The exit-code assertion itself is unchanged (still fails on
   # null / non-zero) - no verification was weakened.
+  # Task 14: $StdinLines (optional) pre-writes scripted input for the
+  # interactive-menu sessions (no-args launch) and then closes the pipe;
+  # EOF makes the menu exit gracefully should it ever read past the script.
   $quoted = $watchArgs | ForEach-Object {
     if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
   }
@@ -110,6 +119,7 @@ function Start-Watch([string[]]$watchArgs, [string]$logName) {
   $psi.UseShellExecute        = $false
   $psi.RedirectStandardOutput = $true
   $psi.RedirectStandardError  = $true
+  $psi.RedirectStandardInput  = ($null -ne $StdinLines)
   $psi.CreateNoWindow         = $true
   $p = New-Object System.Diagnostics.Process
   $p.StartInfo = $psi
@@ -117,6 +127,11 @@ function Start-Watch([string[]]$watchArgs, [string]$logName) {
   $null = $p.Handle  # cache a full-access handle while the process is alive
   $outTask = $p.StandardOutput.ReadToEndAsync()
   $errTask = $p.StandardError.ReadToEndAsync()
+  if ($null -ne $StdinLines) {
+    foreach ($l in $StdinLines) { $p.StandardInput.WriteLine($l) }
+    $p.StandardInput.Flush()
+    $p.StandardInput.Close()
+  }
   $p | Add-Member -NotePropertyName OutTask -NotePropertyValue $outTask
   $p | Add-Member -NotePropertyName ErrTask -NotePropertyValue $errTask
   $p | Add-Member -NotePropertyName OutPath -NotePropertyValue $logPath
@@ -327,6 +342,89 @@ try {
   Assert (-not (Test-Path $mapPath)) 'line2: restore map file removed after full restore'
 } catch {
   Fail "phase B crashed: $($_.Exception.Message)"
+  Log $_.ScriptStackTrace
+} finally {
+  Clear-TestWindows
+}
+
+# --------------------------- phase M: interactive menu (task 14, no args)
+# Maintainer rework (2026-09-22): no-arguments launch opens the interactive
+# menu; exit goes through menu option [0] - no Ctrl+C anywhere. Both
+# sessions are driven entirely by pre-written stdin lines (Start-Watch
+# closes the pipe afterwards; menu EOF fallback exits gracefully anyway).
+try {
+  Log '=== Phase M: interactive menu, no arguments (task 14) ==='
+
+  # --- session M1: menu-driven ungroup watch; exit WITHOUT restore ---
+  $mNotepads = Spawn-Notepads 2
+  Start-Sleep -Seconds 1
+  $mOrig = @()
+  foreach ($w in $mNotepads) { $mOrig += (Get-WindowAumid $w.Hwnd) }
+  # '1' start ungroup watch / '5' inspect / '0' exit / 'n' keep rewrites
+  $menu1 = Start-Watch @() 'menu-line1-ungroup.log' @('1','5','0','n')
+  Wait-Watch $menu1 60
+  $menu1Log = Get-Content (Join-Path $out 'menu-line1-ungroup.log') -Raw
+
+  Assert ($menu1Log -cmatch 'interactive menu') 'menu1: no-args launch shows the interactive menu'
+  if ($menu1Log -match 'startup sweep \(task 13\): pre-existing windows rewritten=(\d+)') {
+    Assert ([int]$Matches[1] -ge 2) "menu1: menu-started watch swept >= 2 pre-existing windows (stats: $($Matches[1]))"
+  } else {
+    Fail 'menu1: watch log missing the startup-sweep stats line'
+  }
+  Assert ($menu1Log -cmatch 'watch: stop requested') 'menu1: graceful stop requested via the menu was logged'
+  Assert ($menu1Log -cmatch '==== watch stats') 'menu1: watch stats printed on graceful stop'
+  Assert ($menu1Log -cmatch 'HWND\s+PID\s+CLASS') 'menu1: menu [5] printed the inspect table'
+  $m1Aumids = @()
+  foreach ($w in $mNotepads) { $m1Aumids += (Get-WindowAumid $w.Hwnd) }
+  Assert (@($m1Aumids | Where-Object { $_ -cmatch '~TBG~w[0-9A-F]{1,16}$' }).Count -eq 2) 'menu1: exit without restore keeps the line-1 suffixes (stop keeps rewrites)'
+
+  # --- session M2: menu restore, menu-driven group watch, stop, exit ---
+  $mapPath = Join-Path $env:LOCALAPPDATA 'tbg-lite\tbg-restore.tsv'
+  if (Test-Path $mapPath) { Remove-Item $mapPath -Force }  # start clean
+  # '4' restore / 'y' confirm / '2' group watch / 'smoke' name / '3' stop / '0' exit
+  $menu2 = Start-Watch @() 'menu-line2-group.log' @('4','y','2','smoke','3','0')
+  Wait-Watch $menu2 60
+  $menu2Log = Get-Content (Join-Path $out 'menu-line2-group.log') -Raw
+
+  if ($menu2Log -match 'restore summary: restored=(\d+)') {
+    Assert ([int]$Matches[1] -ge 2) "menu2: menu [4] restored >= 2 windows (summary: $($Matches[1]))"
+  } else {
+    Fail 'menu2: menu restore summary line missing'
+  }
+  if ($menu2Log -match 'startup sweep \(task 13\): pre-existing windows rewritten=(\d+)') {
+    Assert ([int]$Matches[1] -ge 2) "menu2: menu group watch swept >= 2 pre-existing windows (stats: $($Matches[1]))"
+  } else {
+    Fail 'menu2: group watch log missing the startup-sweep stats line'
+  }
+  $m2Aumids = @()
+  foreach ($w in $mNotepads) { $m2Aumids += (Get-WindowAumid $w.Hwnd) }
+  Assert (@($m2Aumids | Where-Object { $_ -eq 'TBG.Group.smoke' }).Count -eq 2) 'menu2: both notepads carry the shared group AUMID after the menu session'
+  $mappedCount = 0
+  if (Test-Path $mapPath) {
+    Get-Content $mapPath | ForEach-Object {
+      $f = $_ -split "`t"
+      if ($f.Count -ge 3) {
+        foreach ($w in $mNotepads) { if ($f[0] -eq ('{0:X}' -f $w.Hwnd)) { $mappedCount++ } }
+      }
+    }
+  }
+  Assert ($mappedCount -eq 2) 'menu2: restore map holds both notepad originals'
+
+  # --- cleanup via the CLI (args mode unchanged): restore + map removal ---
+  $restoreOut = & $exe restore | Out-String
+  $restoreOut | Set-Content (Join-Path $out 'restore-menu.log') -Encoding UTF8
+  Assert ($LASTEXITCODE -eq 0) 'menu: CLI restore cleanup exited 0'
+  $mFinal = @()
+  foreach ($w in $mNotepads) { $mFinal += (Get-WindowAumid $w.Hwnd) }
+  $okCount = 0
+  for ($i = 0; $i -lt $mNotepads.Count; $i++) {
+    if ($mFinal[$i] -eq $mOrig[$i]) { $okCount++ }
+  }
+  Assert ($okCount -eq 2) "menu: final CLI restore returned both notepads to their original AUMIDs ($okCount/2)"
+  Assert (-not (Test-Path $mapPath)) 'menu: restore map removed after full restore'
+  Shot 'desktop-menu-after.png'
+} catch {
+  Fail "phase M crashed: $($_.Exception.Message)"
   Log $_.ScriptStackTrace
 } finally {
   Clear-TestWindows

@@ -7,9 +7,12 @@
 //! 线路一每窗口后缀（取消分组），线路二共享 AUMID（自定义分组，
 //! 原值落盘 tbg-restore.tsv 供还原）；任务 13 启动扫存量窗口——watch
 //! 一启动即把已存在的应用窗口也按线路改写（对齐 mod 默认“开启即全量
-//! 取消分组”）（docs/plan.md v2 §3）。
+//! 取消分组”）；任务 14（2026-09-22 维护者改版）：无参数启动 →
+//! 交互菜单（`src/menu.rs`，含退出项，取代 Ctrl+C 方案），带参数
+//! 启动 → CLI 行为不变（docs/plan.md v2 §3）。
 
 mod appid;
+mod menu;
 mod restoremap;
 mod singleinstance;
 mod winevent;
@@ -24,14 +27,20 @@ const HELP: &str = "\
 tbg-lite — zero-injection Windows taskbar grouping controller
 
 USAGE:
+    tbg-lite                              (no arguments: interactive menu)
     tbg-lite [--version | --help]
-    tbg-lite inspect [--hwnd <HEX>] [--all]
+    tbg-lite inspect [--hwnd <HEX>] [--all] [--json]
     tbg-lite set --hwnd <HEX> (--suffix | --value <APPID>)
     tbg-lite watch [--strategy <ungroup|group>] [--group <NAME>]
                    [--duration <SECS>] [--dry-run] [--verbose]
     tbg-lite restore [--hwnd <HEX>] [--dry-run]
 
 COMMANDS:
+    (menu)    launched with NO arguments (task 14): interactive menu —
+              start/stop watch on either strategy line, restore all,
+              inspect windows, and exit (no Ctrl+C needed; exiting via
+              the menu stops the watch gracefully: hooks removed and
+              stats printed, with an optional restore-before-exit)
     inspect   list top-level windows and their AppUserModelID
               --hwnd <HEX>   show one window in detail
               --all          also include hidden / tool windows
@@ -56,7 +65,9 @@ COMMANDS:
                                      grouping; requires --group; originals
                                      are persisted to tbg-restore.tsv
                                      next to the exe)
-              --duration <SECS>  run length (default 60; 0 = until Ctrl+C)
+              --duration <SECS>  run length (default 60; 0 = until stopped:
+                                 menu mode exits gracefully via the stop
+                                 flag; CLI mode Ctrl+C is a hard exit)
               --dry-run          log only, never write AUMID
               --verbose          also log skipped windows with reasons
     restore   restore native AppUserModelIDs (docs/plan.md task 7+8):
@@ -71,7 +82,7 @@ COMMANDS:
                              writes, restore map untouched
 
 STATUS:
-    tasks 5-13 done (Phase 0b PoC + default ungroup-on-enable) —
+    tasks 5-14 done (Phase 0b PoC + default ungroup-on-enable + menu) —
     see docs/plan.md v2 §3
 ";
 
@@ -91,7 +102,10 @@ fn main() -> ExitCode {
     }));
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
-        None | Some("-h") | Some("--help") => {
+        // 任务 14（2026-09-22 维护者指示）：无参数启动 → 交互菜单
+        // （含退出项，不需要 Ctrl+C）；--help 仍打印本帮助文本
+        None => menu::run(),
+        Some("-h") | Some("--help") => {
             print!("{HELP}");
             ExitCode::SUCCESS
         }
@@ -153,7 +167,10 @@ fn json_escape(s: &str) -> String {
     out
 }
 
-fn cmd_inspect(args: &[String]) -> Result<(), String> {
+/// 任务 14：cmd_inspect / cmd_restore 供交互菜单复用（菜单项 4/5），
+/// 故 pub(crate)。两者内部各自初始化 COM（ComGuard），可在任意线程
+/// 逐次调用。
+pub(crate) fn cmd_inspect(args: &[String]) -> Result<(), String> {
     let mut hwnd: Option<HWND> = None;
     let mut all = false;
     let mut json = false;
@@ -351,10 +368,13 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
         verbose,
         strategy,
         group_name,
+        // CLI 参数模式：无外部停止标志（--duration 0 = Ctrl+C 强杀，
+        // 原行为不变；优雅退出属菜单模式，任务 14）
+        stop: None,
     })
 }
 
-fn cmd_restore(args: &[String]) -> Result<(), String> {
+pub(crate) fn cmd_restore(args: &[String]) -> Result<(), String> {
     let mut hwnd: Option<HWND> = None;
     let mut dry_run = false;
     let mut it = args.iter();

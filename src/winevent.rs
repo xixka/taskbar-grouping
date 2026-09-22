@@ -17,6 +17,11 @@
 //! 已存在的应用窗口也按当前线路改写（对齐 Windhawk mod 默认行为
 //! "开启即全量取消分组"），而非只管新窗口；两条线路同等生效。
 //!
+//! 任务 14（docs/plan.md v2 §3，2026-09-22 维护者改版）：交互菜单模式
+//! 下 watch 运行在后台线程，通过 `Arc<AtomicBool>` 停止标志优雅退出
+//! （取代原 Ctrl+C 方案——维护者指示不需要 Ctrl+C，退出走菜单）：
+//! 置位后消息泵在 ≤1s 内退出、摘钩、终扫并输出统计。
+//!
 //! 退出时输出统计并全量复扫，给出"漏检 / 被应用回写"数据，对应计划中
 //! "高频连开 50 窗口压测"的观测输入。竞态（先并组后跳变）本身需在
 //! 真实 Windows 上人工观察（运行时行为待 Windows 实测；任务 9 起部分
@@ -25,6 +30,8 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HMODULE, HWND};
@@ -61,7 +68,8 @@ impl WatchStrategy {
 }
 
 pub(crate) struct WatchOptions {
-    /// 监听时长；0 = 直至 Ctrl+C（控制台默认处理为强杀进程，无统计输出）。
+    /// 监听时长；0 = 直至停止（CLI 参数模式下控制台默认处理为强杀进程，
+    /// 无统计输出；交互菜单模式下由停止标志优雅退出，见 `stop`）。
     pub(crate) duration: Duration,
     /// 只记录、不写入 AUMID。
     pub(crate) dry_run: bool,
@@ -71,6 +79,11 @@ pub(crate) struct WatchOptions {
     pub(crate) strategy: WatchStrategy,
     /// 线路二的组名（`--group`；strategy == Group 时必有，main 层已校验）。
     pub(crate) group_name: Option<String>,
+    /// 任务 14：外部停止标志（交互菜单模式传入；CLI 参数模式为 None）。
+    /// Some(_) 时：即使无 deadline 消息泵也以 1s 上限轮询该标志；置位 →
+    /// 摘钩 + 终扫 + 统计输出后正常返回（优雅退出，取代 Ctrl+C 方案）。
+    /// None 时行为与此前完全一致。
+    pub(crate) stop: Option<Arc<AtomicBool>>,
 }
 
 /// 观测统计（对应 docs/plan.md §7 Phase 0b-(6) 的压测数据需求）。
@@ -700,7 +713,12 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     }
     println!("note: DESTROY hook is bookkeeping only (tracked-window cleanup)");
     if opts.duration.is_zero() {
-        println!("duration: until Ctrl+C (hard exit, no stats printed)");
+        if opts.stop.is_some() {
+            // 任务 14：菜单模式——由停止标志优雅退出（无需 Ctrl+C）
+            println!("duration: until stopped from the interactive menu (graceful stop: hooks removed + stats printed)");
+        } else {
+            println!("duration: until Ctrl+C (hard exit, no stats printed)");
+        }
     } else {
         println!("duration: {:?} (Ctrl+C = hard exit without stats)", opts.duration);
     }
@@ -736,8 +754,18 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     // 4. 消息泵：winevent 回调在 PeekMessage 检索期间由系统调用；
     //    MsgWaitForMultipleObjectsEx 让消息一到就醒来（压测时延观察更真实）
     let deadline = (!opts.duration.is_zero()).then(|| Instant::now() + opts.duration);
+    let mut stopped_by_request = false;
     let mut msg = MSG::default();
     loop {
+        // 任务 14：菜单模式的停止标志——置位即优雅退出（摘钩 + 终扫 +
+        // 统计，见循环后的公共退出路径）。启动扫存量在进泵前无条件跑完，
+        // 因此标志在扫存量期间置位也不会丢改写。
+        if let Some(flag) = &opts.stop {
+            if flag.load(Ordering::Relaxed) {
+                stopped_by_request = true;
+                break;
+            }
+        }
         let wait_ms = match deadline {
             Some(d) => {
                 let now = Instant::now();
@@ -752,7 +780,15 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
                 // 理论忙转。每秒醒一次检查 deadline，成本可忽略
                 remain.as_millis().min(1000) as u32
             }
-            None => u32::MAX, // INFINITE（常驻无 deadline，纯等输入）
+            // 无 deadline（常驻）：菜单模式（有停止标志）→ 1s 轮询标志；
+            // CLI 参数模式 → INFINITE（原行为：Ctrl+C 强杀，无统计）
+            None => {
+                if opts.stop.is_some() {
+                    1000
+                } else {
+                    u32::MAX // INFINITE（常驻无 deadline，纯等输入）
+                }
+            }
         };
         unsafe {
             let _ = MsgWaitForMultipleObjectsEx(None, wait_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
@@ -760,6 +796,11 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
                 // 线程消息无窗口过程，检索即消费；winevent 回调在其中触发
             }
         }
+    }
+
+    if stopped_by_request {
+        println!();
+        println!("watch: stop requested (task 14) — removing hooks and running the final scan");
     }
 
     // 5. 摘钩子

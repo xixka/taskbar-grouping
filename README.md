@@ -16,13 +16,19 @@ Two strategy lines (`watch --strategy`):
   (atomic writes, single-instance mutex) for `restore`.
 
 CLI: `inspect` (incl. `--json`), `set`, `watch`, `restore` (incl. `--dry-run`).
+Launched with **no arguments**, tbg-lite opens an interactive menu (task 14):
+start/stop the watch on either strategy line, restore all, inspect windows,
+and exit through menu option `[0]` — no Ctrl+C needed; stopping the watch
+from the menu is graceful (hooks removed, stats printed).
 
 - Implementation plan and task breakdown: [`docs/plan.md`](docs/plan.md) (route B+, v2)
 - Phase 0b acceptance evidence: [`docs/phase0b-acceptance.md`](docs/phase0b-acceptance.md)
 - CI (windows-latest): `cargo build --release --locked` + unit tests + a
-  20-assertion runtime smoke and a 30-assertion acceptance suite, both running
-  against real windows in the runner session. Taskbar visuals / race
-  perception / multi-app coverage still need real-machine validation.
+  33-assertion runtime smoke (incl. the interactive menu, driven via stdin)
+  and a 30-assertion acceptance suite, both running against real windows in
+  the runner session. Taskbar visuals / race perception / multi-app coverage
+  still need real-machine validation.
 
 Status: tasks 0-26 complete (Phase 0b PoC, default ungroup-on-enable,
-audit remediation Phase R); see the task list in `docs/plan.md` v2 §3.
+interactive menu, audit remediation Phase R); see the task list in
+[`docs/plan.md`](docs/plan.md) v2 §3.
