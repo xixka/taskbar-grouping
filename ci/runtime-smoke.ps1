@@ -391,8 +391,13 @@ try {
   Wait-Watch $menu2 60
   $menu2Log = Get-Content (Join-Path $out 'menu-line2-group.log') -Raw
 
-  if ($menu2Log -match 'restore summary: restored=(\d+)') {
-    Assert ([int]$Matches[1] -ge 2) "menu2: menu [4] restored >= 2 windows (summary: $($Matches[1]))"
+  # Both counters are successful line-1 restores: restored = original AUMID
+  # written back; cleared = the window had NO original AUMID (empty), so the
+  # property is cleared (VT_EMPTY). On this runner the notepads have an empty
+  # native AUMID, so they count as cleared (run 35699360388: restored=0
+  # cleared=3). The per-window end-state assertions below are unaffected.
+  if ($menu2Log -match 'restore summary: restored=(\d+) cleared=(\d+)') {
+    Assert (([int]$Matches[1] + [int]$Matches[2]) -ge 2) "menu2: menu [4] restored >= 2 windows (summary: restored=$($Matches[1]) cleared=$($Matches[2]))"
   } else {
     Fail 'menu2: menu restore summary line missing'
   }
