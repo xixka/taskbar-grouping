@@ -65,15 +65,13 @@ function Shot([string]$name) {
 }
 
 function Get-WindowAumid([UInt64]$hwnd) {
-  $hex  = '0x{0:X}' -f $hwnd
-  $text = & $exe inspect --hwnd $hex | Out-String
-  if ($LASTEXITCODE -ne 0) { throw "inspect --hwnd $hex exited with code $LASTEXITCODE" }
-  if ($text -match 'AUMID\s+:\s*(.*)') {
-    $v = $Matches[1].Trim()
-    if ($v -eq '<empty>') { return '' }
-    return $v
-  }
-  throw "could not parse AUMID from inspect output for $hex"
+  # Task 25 (audit BUG-14): machine-readable JSON instead of regexing
+  # the human table (title lines could steal the AUMID match).
+  $hex = '0x{0:X}' -f $hwnd
+  $j = & $exe inspect --hwnd $hex --json | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0) { throw "inspect --hwnd $hex --json exited with code $LASTEXITCODE" }
+  if ($null -eq $j -or $null -eq $j.aumid) { throw "no aumid in JSON output for $hex" }
+  return [string]$j.aumid
 }
 
 # --- process control (same approach as the fixed runtime-smoke.ps1) --------
@@ -138,31 +136,26 @@ function Clear-TestWindows {
   }
 }
 
-# --- app-window discovery via our own `inspect` table ----------------------
-# Column layout of `tbg-lite inspect` rows (see src/main.rs):
-#   [0..17] hwnd (0x + hex, width 18)  [19..25] pid (7)
-#   [27..52] class (26)                [54..83] aumid (30)   [85..] title
+# --- app-window discovery via our own `inspect --json` (task 25, audit
+# BUG-14: fixed-width column slicing broke on non-ASCII titles; JSON is
+# immune and also survives localized content) ------------------------------
 
 function Get-AppWindowList {
   $list = @()
-  foreach ($line in (& $exe inspect)) {
-    if ($line.Length -lt 54 -or -not $line.StartsWith('0x')) { continue }
-    $t = $line.Substring(0, 18).Trim()
+  $rows = @(& $exe inspect --json | ConvertFrom-Json)
+  foreach ($w in $rows) {
+    if ($null -eq $w -or $null -eq $w.hwnd) { continue }
+    $t = [string]$w.hwnd
     if (-not $t.StartsWith('0x')) { continue }
     $hex = $t.Substring(2)
     if ($hex.Length -eq 0) { continue }
-    $pidCol = $line.Substring(19, 7).Trim()
-    $cls    = $line.Substring(27, 26).Trim()
-    $aumCol = $line.Substring(54, 30).Trim()
-    $title  = ''
-    if ($line.Length -gt 85) { $title = $line.Substring(85).TrimEnd() }
     $list += [pscustomobject]@{
       Hex   = $hex
       Hwnd  = [Convert]::ToUInt64($hex, 16)
-      Pid   = $pidCol
-      Class = $cls
-      Aumid = $aumCol
-      Title = $title
+      Pid   = $w.pid
+      Class = [string]$w.class
+      Aumid = [string]$w.aumid
+      Title = [string]$w.title
     }
   }
   return $list

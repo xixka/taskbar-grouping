@@ -29,12 +29,15 @@ USAGE:
     tbg-lite set --hwnd <HEX> (--suffix | --value <APPID>)
     tbg-lite watch [--strategy <ungroup|group>] [--group <NAME>]
                    [--duration <SECS>] [--dry-run] [--verbose]
-    tbg-lite restore [--hwnd <HEX>]
+    tbg-lite restore [--hwnd <HEX>] [--dry-run]
 
 COMMANDS:
     inspect   list top-level windows and their AppUserModelID
               --hwnd <HEX>   show one window in detail
               --all          also include hidden / tool windows
+              --json         machine-readable JSON output (single object
+                             with --hwnd, array otherwise; aumid null =
+                             unreadable) — consumed by CI scripts
     set       rewrite one window's AppUserModelID (docs/plan.md task 5)
               --suffix       append the per-window ungroup marker (~TBG~w<HWND>)
               --value <ID>   set an exact AppUserModelID
@@ -63,6 +66,9 @@ COMMANDS:
               group-marked windows without a map entry are reported
               as orphans and left untouched
               --hwnd <HEX>   restore one window; without it, all windows
+              --dry-run      preview only: list what would be restored
+                             (targets and original values); no property
+                             writes, restore map untouched
 
 STATUS:
     tasks 5-13 done (Phase 0b PoC + default ungroup-on-enable) —
@@ -70,6 +76,19 @@ STATUS:
 ";
 
 fn main() -> ExitCode {
+    // 审计 BUG-09（任务 25）：Windows 无 SIGPIPE 概念，stdout 管道读端
+    // 关闭后 println! 会 panic（"failed printing to stdout: ..."），release
+    // panic=abort 下表现为丑陋中止。装 panic hook：管道断裂 → 静默退出 0
+    // （`tbg-lite inspect | head -1` 等 CLI 管道惯例）；其他 panic → 单行
+    // 报告 + 101（保留可诊断性）。
+    std::panic::set_hook(Box::new(|info| {
+        let msg = info.to_string();
+        if msg.contains("failed printing to stdout") {
+            std::process::exit(0);
+        }
+        eprintln!("tbg-lite: internal error: {msg}");
+        std::process::exit(101);
+    }));
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         None | Some("-h") | Some("--help") => {
@@ -96,7 +115,14 @@ fn report(r: Result<(), String>) -> ExitCode {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("tbg-lite: error: {e}");
-            ExitCode::FAILURE
+            // 审计 P2-16 简版（任务 25）：用法类错误（参数缺失/非法/组合
+            // 不当）退出码 2，运行时错误 1；用法类错误信息统一 "usage: "
+            // 前缀供此处判定
+            if e.starts_with("usage: ") {
+                ExitCode::from(2)
+            } else {
+                ExitCode::FAILURE
+            }
         }
     }
 }
@@ -106,18 +132,38 @@ fn next_arg<'a>(
     flag: &str,
 ) -> Result<&'a String, String> {
     it.next()
-        .ok_or_else(|| format!("missing value for {flag}"))
+        .ok_or_else(|| format!("usage: missing value for {flag}"))
+}
+
+/// JSON 字符串转义（任务 25，审计 BUG-14：inspect --json 机器可读输出
+/// 供 CI 消费，根治定宽列解析与标题行抢匹配问题）。
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn cmd_inspect(args: &[String]) -> Result<(), String> {
     let mut hwnd: Option<HWND> = None;
     let mut all = false;
+    let mut json = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--hwnd" => hwnd = Some(winutil::parse_hwnd(next_arg(&mut it, "--hwnd")?)?),
             "--all" => all = true,
-            other => return Err(format!("inspect: unknown argument '{other}'")),
+            "--json" => json = true,
+            other => return Err(format!("usage: inspect: unknown argument '{other}'")),
         }
     }
     let _com = winutil::ComGuard::init()?;
@@ -126,13 +172,62 @@ fn cmd_inspect(args: &[String]) -> Result<(), String> {
         unsafe {
             let aumid = appid::get_aumid(hwnd)
                 .map_err(|e| format!("inspect 0x{}: read AUMID failed: {e}", winutil::hwnd_hex(hwnd)))?;
+            if json {
+                // 单窗 JSON 对象（aumid 恒可读，否则上面已 Err）
+                println!(
+                    "{{\"hwnd\":\"0x{}\",\"pid\":{},\"class\":\"{}\",\"title\":\"{}\",\"aumid\":\"{}\",\"suffixed\":{},\"grouped\":{}}}",
+                    winutil::hwnd_hex(hwnd),
+                    winutil::window_pid(hwnd),
+                    json_escape(&winutil::class_name(hwnd)),
+                    json_escape(&winutil::window_text(hwnd)),
+                    json_escape(&aumid),
+                    appid::strip_suffix(&aumid, hwnd).is_some(),
+                    appid::is_group_aumid(&aumid)
+                );
+                return Ok(());
+            }
             println!("HWND     : 0x{}", winutil::hwnd_hex(hwnd));
             println!("PID      : {}", winutil::window_pid(hwnd));
             println!("Class    : {}", winutil::class_name(hwnd));
             println!("Title    : {}", winutil::window_text(hwnd));
             println!("AUMID    : {}", winutil::shown_aumid(&aumid));
-            println!("Suffixed : {}", aumid.contains(appid::SUFFIX_MARKER));
+            // 与 JSON 模式一致：严格判定（标记+合法hex+与本窗 HWND 一致）
+            println!("Suffixed : {}", appid::strip_suffix(&aumid, hwnd).is_some());
             println!("Grouped  : {}", appid::is_group_aumid(&aumid));
+        }
+        return Ok(());
+    }
+
+    if json {
+        // 列表 JSON 数组（机器可读：CI 用 ConvertFrom-Json 消费，
+        // 根治定宽列切片错位与标题行抢匹配；读失败窗口 aumid 为 null）
+        let mut rows: Vec<String> = Vec::new();
+        for hwnd in unsafe { winutil::enum_top_level_windows()? } {
+            if !all && !unsafe { winutil::is_app_window(hwnd) } {
+                continue;
+            }
+            unsafe {
+                let aumid = appid::get_aumid(hwnd).ok();
+                let aumid_json = match &aumid {
+                    Some(v) => format!("\"{}\"", json_escape(v)),
+                    None => "null".to_string(),
+                };
+                rows.push(format!(
+                    "{{\"hwnd\":\"0x{}\",\"pid\":{},\"class\":\"{}\",\"title\":\"{}\",\"aumid\":{},\"suffixed\":{},\"grouped\":{}}}",
+                    winutil::hwnd_hex(hwnd),
+                    winutil::window_pid(hwnd),
+                    json_escape(&winutil::class_name(hwnd)),
+                    json_escape(&winutil::window_text(hwnd)),
+                    aumid_json,
+                    aumid.as_deref().map(|v| v.contains(appid::SUFFIX_MARKER)).unwrap_or(false),
+                    aumid.as_deref().map(appid::is_group_aumid).unwrap_or(false)
+                ));
+            }
+        }
+        if rows.is_empty() {
+            println!("[]");
+        } else {
+            println!("[{}]", rows.join(","));
         }
         return Ok(());
     }
@@ -187,6 +282,19 @@ mod tests {
         // 多字节字符不切半：按字符取，非字节
         assert_eq!(truncate("中文测试", 3), "中文~");
     }
+
+    #[test]
+    fn json_escape_specials() {
+        assert_eq!(json_escape("plain"), "plain");
+        assert_eq!(json_escape("a\"b"), "a\\\"b");
+        assert_eq!(json_escape("a\\b"), "a\\\\b");
+        assert_eq!(json_escape("a\nb"), "a\\nb");
+        assert_eq!(json_escape("a\rb"), "a\\rb");
+        assert_eq!(json_escape("a\tb"), "a\\tb");
+        assert_eq!(json_escape("a\u{1}b"), "a\\u0001b");
+        // 非 ASCII 原样（JSON 字符串允许裸 UTF-8）
+        assert_eq!(json_escape("中文"), "中文");
+    }
 }
 
 fn cmd_watch(args: &[String]) -> Result<(), String> {
@@ -202,7 +310,7 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
                 let v = next_arg(&mut it, "--duration")?;
                 duration_secs = v
                     .parse()
-                    .map_err(|_| format!("watch: invalid duration '{v}' (expected seconds)"))?;
+                    .map_err(|_| format!("usage: watch: invalid duration '{v}' (expected seconds)"))?;
             }
             "--strategy" => {
                 let v = next_arg(&mut it, "--strategy")?;
@@ -211,7 +319,7 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
                     "group" => winevent::WatchStrategy::Group,
                     other => {
                         return Err(format!(
-                            "watch: unknown strategy '{other}' (expected ungroup|group)"
+                            "usage: watch: unknown strategy '{other}' (expected ungroup|group)"
                         ))
                     }
                 };
@@ -219,20 +327,24 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
             "--group" => group = Some(next_arg(&mut it, "--group")?.clone()),
             "--dry-run" => dry_run = true,
             "--verbose" => verbose = true,
-            other => return Err(format!("watch: unknown argument '{other}'")),
+            other => return Err(format!("usage: watch: unknown argument '{other}'")),
         }
     }
     // 线路二必须显式给组名；线路一不允许带 --group（防止歧义）
     let group_name = match (strategy, group) {
         (winevent::WatchStrategy::Group, Some(n)) => Some(n),
         (winevent::WatchStrategy::Group, None) => {
-            return Err("watch: --strategy group requires --group <NAME>".into())
+            return Err("usage: watch: --strategy group requires --group <NAME>".into())
         }
         (winevent::WatchStrategy::Ungroup, None) => None,
         (winevent::WatchStrategy::Ungroup, Some(_)) => {
-            return Err("watch: --group is only valid together with --strategy group".into())
+            return Err("usage: watch: --group is only valid together with --strategy group".into())
         }
     };
+    // 组名属参数校验：提前判（usage 退出码 2；winevent::run 内还会再算一次）
+    if let Some(name) = group_name.as_deref() {
+        appid::group_aumid(name).map_err(|e| format!("usage: watch: {e}"))?;
+    }
     winevent::run(winevent::WatchOptions {
         duration: Duration::from_secs(duration_secs),
         dry_run,
@@ -244,11 +356,13 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
 
 fn cmd_restore(args: &[String]) -> Result<(), String> {
     let mut hwnd: Option<HWND> = None;
+    let mut dry_run = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--hwnd" => hwnd = Some(winutil::parse_hwnd(next_arg(&mut it, "--hwnd")?)?),
-            other => return Err(format!("restore: unknown argument '{other}'")),
+            "--dry-run" => dry_run = true,
+            other => return Err(format!("usage: restore: unknown argument '{other}'")),
         }
     }
     let _com = winutil::ComGuard::init()?;
@@ -274,6 +388,8 @@ fn cmd_restore(args: &[String]) -> Result<(), String> {
         // `watch --strategy group` 互斥；遇到第一个共享 AUMID 窗口时获取
         // （纯线路一 restore 不碰表、不参与互斥）。守卫存活至函数返回。
         let mut map_mutex: Option<singleinstance::MapMutex> = None;
+        // 任务 25（审计 P1-12）：--dry-run 预览计数（不动属性、不动表）
+        let mut would = 0u32;
         for hwnd in &targets {
             let aumid = match appid::get_aumid(*hwnd) {
                 Ok(a) => a,
@@ -285,6 +401,24 @@ fn cmd_restore(args: &[String]) -> Result<(), String> {
             };
             if let Some(original) = appid::strip_suffix(&aumid, *hwnd) {
                 // 线路一：后缀内联还原（任务 7）
+                if dry_run {
+                    would += 1;
+                    if original.is_empty() {
+                        println!(
+                            "0x{} {} -> <cleared> [dry-run]",
+                            winutil::hwnd_hex(*hwnd),
+                            aumid
+                        );
+                    } else {
+                        println!(
+                            "0x{} \"{}\" -> \"{}\" [dry-run]",
+                            winutil::hwnd_hex(*hwnd),
+                            aumid,
+                            original
+                        );
+                    }
+                    continue;
+                }
                 if original.is_empty() {
                     // 原本无 AUMID：清除属性（VT_EMPTY）
                     match appid::clear_aumid(*hwnd) {
@@ -348,7 +482,30 @@ fn cmd_restore(args: &[String]) -> Result<(), String> {
                     map_loaded = true;
                 }
                 if let Some(m) = map.as_mut() {
-                    match m.take(key, &aumid) {
+                    // 任务 25：--dry-run 用 peek（只读预览，条目不动）
+                    let outcome = if dry_run {
+                        m.peek(key, &aumid)
+                    } else {
+                        m.take(key, &aumid)
+                    };
+                    match outcome {
+                        Some(original) if dry_run => {
+                            would += 1;
+                            if original.is_empty() {
+                                println!(
+                                    "0x{} \"{}\" -> <cleared> [dry-run]",
+                                    winutil::hwnd_hex(*hwnd),
+                                    aumid
+                                );
+                            } else {
+                                println!(
+                                    "0x{} \"{}\" -> \"{}\" [dry-run]",
+                                    winutil::hwnd_hex(*hwnd),
+                                    aumid,
+                                    original
+                                );
+                            }
+                        }
                         Some(original) if original.is_empty() => {
                             match appid::clear_aumid(*hwnd) {
                                 Ok(()) => {
@@ -411,13 +568,20 @@ fn cmd_restore(args: &[String]) -> Result<(), String> {
                 }
             }
         }
-        // 映射表有变动（take/remove）则回写；还原完毕且表空则文件删除
-        if map_loaded {
+        // 映射表有变动（take/remove）则回写；还原完毕且表空则文件删除。
+        // 任务 25：--dry-run 只预览，不动表不回写
+        if map_loaded && !dry_run {
             if let Some(m) = &map {
                 m.save().map_err(|e| format!("restore: {e}"))?;
             }
         }
         println!();
+        if dry_run {
+            println!(
+                "restore summary (dry-run): would-restore={would} skipped(no marker)={skipped} orphans(no map entry)={orphans} failed={failed} — nothing written, restore map untouched"
+            );
+            return Ok(());
+        }
         println!(
             "restore summary: restored={restored} cleared={cleared} skipped(no marker)={skipped} orphans(no map entry)={orphans} failed={failed}"
         );
@@ -441,12 +605,12 @@ fn cmd_set(args: &[String]) -> Result<(), String> {
             "--hwnd" => hwnd = Some(winutil::parse_hwnd(next_arg(&mut it, "--hwnd")?)?),
             "--suffix" => suffix = true,
             "--value" => value = Some(next_arg(&mut it, "--value")?.clone()),
-            other => return Err(format!("set: unknown argument '{other}'")),
+            other => return Err(format!("usage: set: unknown argument '{other}'")),
         }
     }
-    let hwnd = hwnd.ok_or("set: --hwnd <HEX> is required")?;
+    let hwnd = hwnd.ok_or("usage: set: --hwnd <HEX> is required")?;
     if suffix == value.is_some() {
-        return Err("set: exactly one of --suffix / --value is required".into());
+        return Err("usage: set: exactly one of --suffix / --value is required".into());
     }
     let _com = winutil::ComGuard::init()?;
     unsafe {
@@ -478,7 +642,7 @@ fn cmd_set(args: &[String]) -> Result<(), String> {
             // 审计 BUG-07/SEC-05（任务 23）：拦超长与控制字符，防破坏
             // 属性存储语义与线路二 TSV 还原表
             appid::validate_aumid_value(&v)
-                .map_err(|e| format!("set: invalid --value: {e}"))?;
+                .map_err(|e| format!("usage: set: invalid --value: {e}"))?;
             v
         };
         let t0 = std::time::Instant::now();

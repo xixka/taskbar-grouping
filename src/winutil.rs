@@ -144,11 +144,12 @@ pub(crate) unsafe fn enum_top_level_windows() -> Result<Vec<HWND>, String> {
 
 /// 解析 HWND 参数（十六进制，可带 0x 前缀）。
 /// windows 0.58 的 HWND 是指针包装，需经 usize 中转构造。
+/// 错误属用法类（任务 25："usage: " 前缀 → 退出码 2）。
 pub(crate) fn parse_hwnd(s: &str) -> Result<HWND, String> {
     let t = s.trim().trim_start_matches("0x").trim_start_matches("0X");
     isize::from_str_radix(t, 16)
         .map(|v| HWND(v as usize as *mut core::ffi::c_void))
-        .map_err(|_| format!("invalid HWND '{s}' (expected hex, e.g. 0x00000000010C12A8)"))
+        .map_err(|_| format!("usage: invalid HWND '{s}' (expected hex, e.g. 0x00000000010C12A8)"))
 }
 
 pub(crate) fn hwnd_hex(hwnd: HWND) -> String {

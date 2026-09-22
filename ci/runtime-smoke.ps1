@@ -55,15 +55,13 @@ function Shot([string]$name) {
 }
 
 function Get-WindowAumid([UInt64]$hwnd) {
-  $hex  = '0x{0:X}' -f $hwnd
-  $text = & $exe inspect --hwnd $hex | Out-String
-  if ($LASTEXITCODE -ne 0) { throw "inspect --hwnd $hex exited with code $LASTEXITCODE" }
-  if ($text -match 'AUMID\s+:\s*(.*)') {
-    $v = $Matches[1].Trim()
-    if ($v -eq '<empty>') { return '' }
-    return $v
-  }
-  throw "could not parse AUMID from inspect output for $hex"
+  # Task 25 (audit BUG-14): machine-readable JSON instead of regexing
+  # the human table (title lines could steal the AUMID match).
+  $hex = '0x{0:X}' -f $hwnd
+  $j = & $exe inspect --hwnd $hex --json | ConvertFrom-Json
+  if ($LASTEXITCODE -ne 0) { throw "inspect --hwnd $hex --json exited with code $LASTEXITCODE" }
+  if ($null -eq $j -or $null -eq $j.aumid) { throw "no aumid in JSON output for $hex" }
+  return [string]$j.aumid
 }
 
 function Spawn-Notepads([int]$n) {
