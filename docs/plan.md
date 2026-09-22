@@ -21,15 +21,18 @@
    可选先还原）；带参数启动 = CLI 行为不变。原任务的 Ctrl+C console
    control handler 与 `--restore-on-exit` 参数方案作废。
 
-## §1 现状（截至任务 14，含 Phase R 22-26）
+## §1 现状（截至任务 19，含 Phase R 22-26）
 
-- 已完成任务 0–14 与审计修复 22–26（每任务一提交，见 git log）：CLI 四命令
-  （`inspect` / `set` / `watch` 双线路 / `restore` 双路径）、事件驱动
+- 已完成任务 0–14、19 与审计修复 22–26（每任务一提交，见 git log）；任务 15
+  模板已建（真机填写待维护者）：CLI 七命令（`inspect` / `set` / `watch`
+  双线路 / `restore` 双路径 / `install` / `uninstall` / `status`）、事件驱动
   （SetWinEventHook 零注入）、线路二还原映射（`tbg-restore.tsv`，防 HWND
   复用）、启动扫存量（任务 13：开启即全量取消分组，对齐 mod 默认）、无参数
   交互菜单（任务 14：菜单启动/停止 watch、还原、inspect、退出，无需
-  Ctrl+C）、审计修复（原子写/单实例/标记严格校验/钉 SHA 等）；CI 四 job
-  （`build` 编译+单测门禁 / `lockfile` 新鲜度 / `runtime-smoke` 33 断言 /
+  Ctrl+C）、开机自启三命令（任务 19：HKCU Run，无需管理员；`status` 速览
+  自启/标记窗口/映射表）、审计修复（原子写/单实例/标记严格校验/钉 SHA 等）；
+  CI 四 job
+  （`build` 编译+单测门禁 / `lockfile` 新鲜度 / `runtime-smoke` 47 断言 /
   `phase0b-acceptance` 30 断言）。
 - 验收关键数据（详见验收报告）：双线路 50 窗口压测 0 漏检 0 回写 0 写失败；UIA 证实
   线路一每窗口独立按钮、线路二 50 窗合并单组、还原回原生；工作集 9.15 MB；explorer
@@ -84,8 +87,18 @@
 
 ### Phase 3 — 常驻、自启与分发
 
-- [ ] **任务 19**：`install` / `uninstall` / `status`——HKCU Run 注册开机自启
+- [x] **任务 19**：`install` / `uninstall` / `status`——HKCU Run 注册开机自启
       （无需管理员）；`status` 输出当前标记窗口数、映射表状态、自启状态。
+      完成：`src/autostart.rs`——注册命令 = 当前 exe + `watch --strategy <s>
+      [--group <NAME>] --duration 0`（重装覆盖不累积，卸载幂等）；`status`
+      全程只读（映射表走 `restoremap::status` 纯只读探测，不建目录/不迁移，
+      审计 BUG-02 红线）；CI runtime-smoke 新增 Phase I（双线路注册值
+      逐字节断言 + status 三块 + 幂等卸载 + 用法错误退出码 2），断言
+      33→47；新增 5 项单元测试（命令行组装/路径词典法规范化/wide 终止符/
+      REG_SZ 编解码往返/映射表只读状态三态）。单测计数勘误：此前文档称
+      35 项系虚报，run 35700057611 build 日志实数 28 项，本次实测
+      28+5=33 项。自启进程
+      控制台窗口可见性与常驻宿主生命周期归任务 20。
 - [ ] **任务 20**：explorer 重启监视与自动重应用——宿主轮询 explorer PID（2 s 级），
       重启后自动重扫重标记（验收报告 §5-5：窗口属性可能随 explorer 重启丢失）；
       环形日志（`%LOCALAPPDATA%\tbg\tbg.log`，默认关闭）；连续异常退出熔断（自动
@@ -140,7 +153,7 @@ DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任
 | 层面 | 方法 |
 |---|---|
 | 编译门禁 | CI `build`（windows-latest，`cargo build --release --locked` + `cargo test --locked`，任务 22b/23） |
-| 双线路行为回归 | CI `runtime-smoke`（33 断言，含启动扫存量与交互菜单）+ `phase0b-acceptance`（30 断言），每次 push |
+| 双线路行为回归 | CI `runtime-smoke`（47 断言，含启动扫存量、交互菜单与自启 Phase I）+ `phase0b-acceptance`（30 断言），每次 push |
 | 固定磁贴联动 | CI 断言（任务 18） |
 | 真机清单 | 竞态感知率、覆盖矩阵全量、长时回写、视觉细节、explorer 重启（验收报告 §5） |
 | 内存/体积 | 验收报告口径；发布前回填 `BENCHMARK.md`（任务 21） |

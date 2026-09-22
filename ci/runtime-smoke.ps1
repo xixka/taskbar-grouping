@@ -1,4 +1,4 @@
-# ci/runtime-smoke.ps1 - task 9 + task 13 + task 14 (docs/plan.md v2 §3)
+# ci/runtime-smoke.ps1 - task 9 + task 13 + task 14 + task 19 (docs/plan.md v2 §3)
 #
 # Runtime smoke test for both strategy lines, executed on a GitHub Actions
 # windows-latest runner, which is a real Windows session. It spawns notepad
@@ -20,6 +20,11 @@
 #             (graceful stop: stats printed, rewrites kept); M2 restores
 #             from the menu, starts a group watch (name via prompt), stops
 #             it, exits. No Ctrl+C involved anywhere.
+#   Phase I - task 19 autostart (HKCU Run): install (line 1 default),
+#             registry value compared byte-for-byte, status reports all
+#             three state blocks, install --strategy group overwrites the
+#             value (line 2), uninstall verified idempotent, usage error
+#             (group without --group) exits 2.
 #   Phase C - explorer/taskbar feasibility probe (best effort, no
 #             assertions): screenshots only, to see whether a real taskbar
 #             can be hosted in this session.
@@ -438,6 +443,69 @@ try {
   Log $_.ScriptStackTrace
 } finally {
   Clear-TestWindows
+}
+
+# --------------------------- phase I: install / uninstall / status (task 19)
+# HKCU Run autostart, both strategy lines in turn: registry value data is
+# compared byte-for-byte against the expected command (quoted exe + watch
+# tail), `status` must report all three state blocks, uninstall is verified
+# idempotent, and usage errors (group without --group) must exit 2.
+try {
+  Log '=== Phase I: install / uninstall / status (task 19, HKCU Run) ==='
+  $runKeyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+  # defensive pre-clean (not an assertion): never inherit a stale value
+  if (Get-ItemProperty -Path $runKeyPath -Name 'tbg-lite' -ErrorAction SilentlyContinue) {
+    Remove-ItemProperty -Path $runKeyPath -Name 'tbg-lite' -ErrorAction SilentlyContinue
+  }
+
+  # --- baseline: nothing installed ---
+  $st0 = & $exe status | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($st0 -cmatch 'autostart\s*:\s*not installed')) 'status: baseline reports autostart not installed (exit 0)'
+  Assert ($st0 -cmatch 'marked\s*:\s*line1\(ungroup\)=\d+\s+line2\(group\)=\d+') 'status: marked-window counters present for both strategy lines'
+  Assert ($st0 -cmatch 'restore map\s*:') 'status: restore map state line present'
+
+  # --- line 1 (default ungroup) ---
+  $exeReal = (Resolve-Path $exe).Path
+  $cmd1 = '"' + $exeReal + '" watch --strategy ungroup --duration 0'
+  $install1 = & $exe install | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($install1 -cmatch 'autostart registered')) 'install: line-1 install exits 0 and reports registration'
+  $reg1 = (Get-ItemProperty -Path $runKeyPath -Name 'tbg-lite' -ErrorAction SilentlyContinue).'tbg-lite'
+  Assert ($reg1 -eq $cmd1) "install: HKCU Run value data matches the line-1 command exactly (got: $reg1)"
+  $st1 = & $exe status | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($st1 -cmatch 'autostart\s*:\s*installed') -and ($st1 -cmatch [regex]::Escape('--strategy ungroup --duration 0'))) 'status: reports installed with the line-1 ungroup command'
+
+  # --- line 2 (group) overwrites the value ---
+  $cmd2 = '"' + $exeReal + '" watch --strategy group --group smoke --duration 0'
+  $install2 = & $exe install --strategy group --group smoke | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($install2 -cmatch 'autostart updated')) 'install: line-2 re-install reports overwrite (updated)'
+  $reg2 = (Get-ItemProperty -Path $runKeyPath -Name 'tbg-lite' -ErrorAction SilentlyContinue).'tbg-lite'
+  Assert ($reg2 -eq $cmd2) "install: HKCU Run value switched to the line-2 group command (got: $reg2)"
+  $st2 = & $exe status | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($st2 -cmatch [regex]::Escape('--strategy group --group smoke --duration 0'))) 'status: reports the line-2 group command'
+
+  # --- uninstall (verified idempotent) ---
+  $un = & $exe uninstall | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($un -cmatch 'autostart removed')) 'uninstall: exits 0 and reports removal'
+  Assert ($null -eq (Get-ItemProperty -Path $runKeyPath -Name 'tbg-lite' -ErrorAction SilentlyContinue)) 'uninstall: HKCU Run value is gone'
+  $un2 = & $exe uninstall | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($un2 -cmatch 'not installed')) 'uninstall: second run exits 0 with nothing to remove (idempotent)'
+
+  # --- usage error: --strategy group without --group must exit 2 ---
+  # (Start-Watch + manual wait: Wait-Watch throws on non-zero exit, which is
+  # exactly what we WANT to observe here; stderr lands in the .err.log file)
+  $usage = Start-Watch @('install','--strategy','group') 'install-usage.log'
+  $null = $usage.WaitForExit(30000)
+  $usage.WaitForExit()
+  Flush-WatchLogs $usage
+  Assert ($usage.ExitCode -eq 2) "install usage: --strategy group without --group exits 2 (got: $($usage.ExitCode))"
+  $usageErr = Get-Content (Join-Path $out 'install-usage.err.log') -Raw
+  Assert ($usageErr -cmatch 'usage:') 'install usage: stderr carries the usage message'
+} catch {
+  Fail "phase I crashed: $($_.Exception.Message)"
+  Log $_.ScriptStackTrace
+} finally {
+  # never leave the autostart value behind on the runner
+  Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'tbg-lite' -ErrorAction SilentlyContinue
 }
 
 # --------------------------- phase C: explorer/taskbar feasibility probe

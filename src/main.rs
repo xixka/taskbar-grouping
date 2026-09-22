@@ -9,9 +9,12 @@
 //! 一启动即把已存在的应用窗口也按线路改写（对齐 mod 默认“开启即全量
 //! 取消分组”）；任务 14（2026-09-22 维护者改版）：无参数启动 →
 //! 交互菜单（`src/menu.rs`，含退出项，取代 Ctrl+C 方案），带参数
-//! 启动 → CLI 行为不变（docs/plan.md v2 §3）。
+//! 启动 → CLI 行为不变；任务 19（Phase 3）：`install` / `uninstall` /
+//! `status`——HKCU Run 开机自启（无需管理员）与状态速览（自启命令、
+//! 标记窗口计数、映射表状态）（docs/plan.md v2 §3）。
 
 mod appid;
+mod autostart;
 mod menu;
 mod restoremap;
 mod singleinstance;
@@ -34,6 +37,9 @@ USAGE:
     tbg-lite watch [--strategy <ungroup|group>] [--group <NAME>]
                    [--duration <SECS>] [--dry-run] [--verbose]
     tbg-lite restore [--hwnd <HEX>] [--dry-run]
+    tbg-lite install [--strategy <ungroup|group>] [--group <NAME>]
+    tbg-lite uninstall
+    tbg-lite status
 
 COMMANDS:
     (menu)    launched with NO arguments (task 14): interactive menu —
@@ -80,10 +86,23 @@ COMMANDS:
               --dry-run      preview only: list what would be restored
                              (targets and original values); no property
                              writes, restore map untouched
+    install   register per-user autostart (task 19): writes the HKCU Run
+              value "tbg-lite" (no admin rights needed). The registered
+              command is the current exe running `watch` along the chosen
+              strategy line with --duration 0 (run until stopped);
+              default line = ungroup. Re-running install replaces the
+              previous command (no accumulation). Console visibility and
+              the resident-host lifecycle are task 20 scope
+    uninstall remove the autostart entry; idempotent — reports
+              "not installed" and exits 0 when nothing is registered
+    status    one-glance state (task 19): the autostart command (or
+              "not installed"), marked-window counters per strategy line,
+              and the restore map (entries / absent / corrupt). Read-only:
+              never creates, migrates or rewrites the map
 
 STATUS:
-    tasks 5-14 done (Phase 0b PoC + default ungroup-on-enable + menu) —
-    see docs/plan.md v2 §3
+    tasks 5-14 + 19 done; task 15 template shipped (real-machine matrix
+    pending maintainer fill) — see docs/plan.md v2 §3
 ";
 
 fn main() -> ExitCode {
@@ -117,6 +136,9 @@ fn main() -> ExitCode {
         Some("set") => report(cmd_set(&args[1..])),
         Some("watch") => report(cmd_watch(&args[1..])),
         Some("restore") => report(cmd_restore(&args[1..])),
+        Some("install") => report(cmd_install(&args[1..])),
+        Some("uninstall") => report(cmd_uninstall(&args[1..])),
+        Some("status") => report(cmd_status(&args[1..])),
         Some(other) => {
             eprintln!("tbg-lite: unknown command '{other}' (see --help)");
             ExitCode::from(2)
@@ -676,6 +698,168 @@ fn cmd_set(args: &[String]) -> Result<(), String> {
         println!(
             "note: taskbar re-layout latency must be observed manually (docs/plan.md task 5-(2))"
         );
+    }
+    Ok(())
+}
+
+/// 任务 19：注册开机自启。参数与 `watch` 同构（--strategy / --group），
+/// 注册的命令行 = 当前 exe + `watch --strategy <s> [--group <NAME>]
+/// --duration 0`（0 = 常驻直至停止；常驻宿主生命周期属任务 20）。
+fn cmd_install(args: &[String]) -> Result<(), String> {
+    let mut strategy = winevent::WatchStrategy::Ungroup;
+    let mut group: Option<String> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--strategy" => {
+                let v = next_arg(&mut it, "--strategy")?;
+                strategy = match v.as_str() {
+                    "ungroup" => winevent::WatchStrategy::Ungroup,
+                    "group" => winevent::WatchStrategy::Group,
+                    other => {
+                        return Err(format!(
+                            "usage: install: unknown strategy '{other}' (expected ungroup|group)"
+                        ))
+                    }
+                };
+            }
+            "--group" => group = Some(next_arg(&mut it, "--group")?.clone()),
+            other => return Err(format!("usage: install: unknown argument '{other}'")),
+        }
+    }
+    // 与 watch 相同的组合规则：线路二必须显式组名；线路一不允许带 --group
+    let group_name = match (strategy, group) {
+        (winevent::WatchStrategy::Group, Some(n)) => Some(n),
+        (winevent::WatchStrategy::Group, None) => {
+            return Err("usage: install: --strategy group requires --group <NAME>".into())
+        }
+        (winevent::WatchStrategy::Ungroup, None) => None,
+        (winevent::WatchStrategy::Ungroup, Some(_)) => {
+            return Err("usage: install: --group is only valid together with --strategy group".into())
+        }
+    };
+    if let Some(name) = group_name.as_deref() {
+        appid::group_aumid(name).map_err(|e| format!("usage: install: {e}"))?;
+    }
+    let exe = std::env::current_exe()
+        .map_err(|e| format!("install: cannot locate the current exe: {e}"))?
+        .to_string_lossy()
+        .into_owned();
+    // 注册表里存干净路径：去 `\\?\` 前缀、折叠 `..` 段（GetModuleFileNameW
+    // 可能保留启动路径形态，任务 19 注记）
+    let exe = autostart::normalize_win_path(&exe);
+    let mut tail: Vec<String> = vec![
+        "watch".into(),
+        "--strategy".into(),
+        match strategy {
+            winevent::WatchStrategy::Ungroup => "ungroup".into(),
+            winevent::WatchStrategy::Group => "group".into(),
+        },
+    ];
+    if let Some(name) = &group_name {
+        tail.push("--group".into());
+        tail.push(name.clone());
+    }
+    tail.push("--duration".into());
+    tail.push("0".into());
+    let refs: Vec<&str> = tail.iter().map(|s| s.as_str()).collect();
+    let command = autostart::build_command(&exe, &refs);
+    match autostart::install(&command)? {
+        autostart::InstallOutcome::New => {
+            println!(
+                "autostart registered (HKCU Run value '{}')",
+                autostart::VALUE_NAME
+            );
+        }
+        autostart::InstallOutcome::Replaced(prev) => {
+            println!("autostart updated (previous command replaced)");
+            println!("previous: {prev}");
+        }
+    }
+    println!("command : {command}");
+    println!(
+        "note    : the registered watch runs until stopped (--duration 0); resident-host lifecycle is task 20"
+    );
+    Ok(())
+}
+
+/// 任务 19：删除开机自启（幂等：未安装时明确报告、退出 0）。
+fn cmd_uninstall(args: &[String]) -> Result<(), String> {
+    if let Some(a) = args.first() {
+        return Err(format!("usage: uninstall: unknown argument '{}'", a));
+    }
+    match autostart::uninstall()? {
+        autostart::UninstallOutcome::Removed(prev) => {
+            println!(
+                "autostart removed (HKCU Run value '{}')",
+                autostart::VALUE_NAME
+            );
+            println!("was     : {prev}");
+        }
+        autostart::UninstallOutcome::NotInstalled => {
+            println!("autostart not installed; nothing to remove");
+        }
+    }
+    Ok(())
+}
+
+/// 任务 19：状态速览——自启命令（HKCU Run）、双线路标记窗口计数、映射表
+/// 状态。全程只读：注册表只读；窗口 AUMID 只读；映射表走 `restoremap::
+/// status`（不建目录/不迁移/不写文件，审计 BUG-02 红线）。
+fn cmd_status(args: &[String]) -> Result<(), String> {
+    if let Some(a) = args.first() {
+        return Err(format!("usage: status: unknown argument '{}'", a));
+    }
+    // 1) 自启状态（注册表读取，无需 COM）
+    match autostart::read_command()? {
+        Some(cmd) => println!("autostart  : installed — {cmd}"),
+        None => println!("autostart  : not installed"),
+    }
+    // 2) 标记窗口计数（属性存储读取需 COM；只统计任务栏语义的应用窗口）
+    {
+        let _com = winutil::ComGuard::init()?;
+        let mut line1 = 0u32;
+        let mut line2 = 0u32;
+        let mut unreadable = 0u32;
+        for hwnd in unsafe { winutil::enum_top_level_windows()? } {
+            if !unsafe { winutil::is_app_window(hwnd) } {
+                continue;
+            }
+            match unsafe { appid::get_aumid(hwnd) } {
+                Ok(a) => {
+                    // 与 restore 同口径的严格判定（标记+合法hex+HWND 一致）
+                    if appid::strip_suffix(&a, hwnd).is_some() {
+                        line1 += 1;
+                    } else if appid::is_group_aumid(&a) {
+                        line2 += 1;
+                    }
+                }
+                Err(_) => unreadable += 1,
+            }
+        }
+        let total = line1 + line2;
+        println!("marked     : line1(ungroup)={line1} line2(group)={line2} (total {total})");
+        if unreadable > 0 {
+            println!("             ({unreadable} app window(s) had an unreadable AUMID)");
+        }
+    }
+    // 3) 映射表状态（纯只读探测）
+    match restoremap::data_dir() {
+        Ok(dir) => {
+            let path = dir.join(restoremap::MAP_FILE_NAME);
+            match restoremap::status(&dir) {
+                restoremap::MapStatus::Absent => {
+                    println!("restore map: absent ({})", path.display())
+                }
+                restoremap::MapStatus::Intact { entries } => {
+                    println!("restore map: {entries} entries ({})", path.display())
+                }
+                restoremap::MapStatus::Corrupt(e) => {
+                    println!("restore map: CORRUPT — {e} ({})", path.display())
+                }
+            }
+        }
+        Err(e) => println!("restore map: unavailable ({e})"),
     }
     Ok(())
 }

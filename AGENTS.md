@@ -21,7 +21,7 @@ API（`SHGetPropertyStoreForWindow` + `PKEY_AppUserModel_ID`）改写运行中�
 Phase 0b（任务 5-10）已验收：runtime-smoke + phase0b-acceptance 断言全绿
 （docs/phase0b-acceptance.md），UIA 证实双线路任务栏层效果；
 任务 13 起 runtime-smoke 扩至 20 项断言（含启动扫存量），任务 14 起扩至
-33 项（含交互菜单 Phase M）。
+33 项（含交互菜单 Phase M），任务 19 起扩至 47 项（含自启 Phase I）。
 
 **交互菜单（任务 14，2026-09-22 维护者改版）**：无参数启动 `tbg-lite` 进入
 交互菜单（`src/menu.rs`）——`[1]`/`[2]` 启动线路一/线路二 watch（后台线程 +
@@ -44,12 +44,13 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 - `cargo build --release` —— 唯一经验证的构建命令；提取自
   `.github/workflows/ci.yml`，已由 CI 实际运行通过（windows-latest）。本仓库验收
   门禁 = 该命令在 CI 绿灯。
-- `ci/runtime-smoke.ps1` —— CI 运行时冒烟（任务 9 + 13 + 14，`runtime-smoke`
-  job）：在 windows-latest 真实会话拉起 notepad 窗口，断言双线路 AUMID
-  改写/复原、任务 13 启动扫存量（Phase 0 线路一 / Phase B 线路二预开窗口
-  断言）与任务 14 交互菜单（Phase M 双会话：stdin 预写驱动，无参启动 →
-  菜单启停 watch/还原/退出，全程无 Ctrl+C）；33 项断言；仅由 CI 执行，
-  本地未验证。
+- `ci/runtime-smoke.ps1` —— CI 运行时冒烟（任务 9 + 13 + 14 + 19，
+  `runtime-smoke` job）：在 windows-latest 真实会话拉起 notepad 窗口，断言
+  双线路 AUMID 改写/复原、任务 13 启动扫存量（Phase 0 线路一 / Phase B
+  线路二预开窗口断言）、任务 14 交互菜单（Phase M 双会话：stdin 预写驱动，
+  无参启动 → 菜单启停 watch/还原/退出，全程无 Ctrl+C）与任务 19 自启
+  （Phase I：双线路 install 注册值逐字节比对、status 三块状态、幂等卸载、
+  用法错误退出码 2）；47 项断言；仅由 CI 执行，本地未验证。
 - `ci/phase0b-accept.ps1` —— CI Phase 0b 验收套件（任务 10，
   `phase0b-acceptance` job）：双线路各 50 窗口压测 + 常驻内存 <10MB 判定
   （门禁）；多应用覆盖子集、Edge 回写探针、UIA 任务栏按钮枚举
@@ -57,8 +58,10 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   仅由 CI 执行，本地未验证。
 - 禁止本地执行 cargo 构建/运行（本地无 Rust 工具链，且维护者明确禁止）；一切编译
   验证走 CI。
-- `cargo test`（任务 23 起）：35 项纯逻辑单元测试（任务 14 增菜单确认解析
-  与 stdin 首行 BOM 容错 4 项），纳入 build job 门禁
+- `cargo test`（任务 23 起）：33 项纯逻辑单元测试（任务 19 增自启命令行组装/
+  路径词典法规范化/wide 终止符/REG_SZ 编解码往返/映射表只读状态三态 5 项）
+  ——计数勘误：此前称 35 项系虚报，run 35700057611 build 日志实数 28 项，
+  28+5=33；纳入 build job 门禁
   （`cargo test --locked`）；`cargo build --release --locked`（任务 22b 起）。
 - `cargo fmt` / `cargo clippy` 未配置、未验证 → 见"待确认"（需一次性格式
   化任务，见审计 P2-14）。
@@ -68,7 +71,8 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 - `src/main.rs` —— CLI 入口：无参数 → 交互菜单（任务 14，`menu::run`）；
   `inspect`（含 `--json` 机器可读）/ `set` / `watch`（双线路
   `--strategy ungroup|group` 切换）/ `restore`（双线路还原 + `--dry-run`
-  预览）；panic hook 管道断裂优雅退出；用法错误退出码 2
+  预览）/ `install` / `uninstall` / `status`（任务 19 开机自启与状态速览）；
+  panic hook 管道断裂优雅退出；用法错误退出码 2
 - `src/menu.rs` —— 交互菜单（任务 14）：watch 后台线程化（停止标志优雅
   退出，取代 Ctrl+C）、复用 cmd_inspect/cmd_restore、stdin EOF 优雅退出
 - `src/appid.rs` —— AUMID 读写核心（属性存储 API）；线路一/线路二标记
@@ -81,6 +85,10 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   自动迁移；防 HWND 复用校验）
 - `src/singleinstance.rs` —— 映射表单实例互斥（任务 22：
   `Local\tbg-lite.map` 命名互斥体，审计 BUG-02）
+- `src/autostart.rs` —— 开机自启（任务 19）：HKCU Run `tbg-lite` 值的
+  读/写/删（install 覆盖式、uninstall 幂等、read_command 只读；REG_SZ
+  UTF-16LE 编解码含往返单测）；注册命令 = 当前 exe + `watch` 参数尾
+  （`--duration 0` 常驻，宿主生命周期归任务 20）
 - `src/winutil.rs` —— 窗口/COM/字符串工具（枚举、应用窗口判定、cloak 检测）
 - `ci/runtime-smoke.ps1` —— CI 运行时冒烟脚本（任务 9 + 13 + 14；双线路
   AUMID 断言 + 启动扫存量断言 + 交互菜单 Phase M + 截图/explorer 探针，

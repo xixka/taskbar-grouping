@@ -196,6 +196,37 @@ impl RestoreMap {
     }
 }
 
+/// 映射表只读状态（任务 19 `status`）。
+#[derive(Debug)]
+pub(crate) enum MapStatus {
+    /// 文件不存在（无待还原的线路二原值）。
+    Absent,
+    /// 可解析，含 `entries` 条记录。
+    Intact { entries: usize },
+    /// 文件存在但损坏（原文保留供人工处置——fail-safe，不静默丢弃）。
+    Corrupt(String),
+}
+
+/// 只读探测映射表状态：**不建目录、不触发旧表迁移、不写任何文件**
+/// （审计 BUG-02 红线：任何写 `tbg-restore.tsv` 的路径必须先持
+/// `Local\tbg-lite.map` 互斥体；与 `RestoreMap::load` 的副作用路径刻意
+/// 分离——load 会 create_dir_all + 迁移旧表，status 绝不碰盘）。
+pub(crate) fn status(dir: &Path) -> MapStatus {
+    let path = dir.join(MAP_FILE_NAME);
+    if !path.exists() {
+        return MapStatus::Absent;
+    }
+    match fs::read_to_string(&path) {
+        Err(e) => MapStatus::Corrupt(format!("read failed: {e}")),
+        Ok(text) => match parse(&text) {
+            Ok(entries) => MapStatus::Intact {
+                entries: entries.len(),
+            },
+            Err(e) => MapStatus::Corrupt(e),
+        },
+    }
+}
+
 /// 旧表一次性迁移（exe 同目录 → 新数据目录）。失败仅忽略：旧表原样保留。
 fn migrate_legacy(new_path: &Path) -> Result<(), String> {
     let Ok(legacy_dir) = exe_dir() else {
@@ -328,6 +359,36 @@ mod tests {
         let dir = test_dir("badhwnd");
         fs::write(dir.join(MAP_FILE_NAME), "ZZZZ\tTBG.Group.work\tApp.1\n").unwrap();
         assert!(RestoreMap::load(&dir).is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn status_read_only_three_states() {
+        let dir = test_dir("status");
+        // 不存在 → Absent（status 绝不创建目录/文件）
+        assert!(matches!(status(&dir), MapStatus::Absent));
+        assert!(!dir.join(MAP_FILE_NAME).exists());
+        // 有条目 → Intact（计条数，无副作用：文件内容不变）
+        let mut m = RestoreMap::load(&dir).unwrap();
+        m.record(0x11, "TBG.Group.work", "A");
+        m.record(0x22, "TBG.Group.work", "B");
+        m.save().unwrap();
+        let before = fs::read_to_string(dir.join(MAP_FILE_NAME)).unwrap();
+        match status(&dir) {
+            MapStatus::Intact { entries } => assert_eq!(entries, 2),
+            other => panic!("expected Intact, got {other:?}"),
+        }
+        assert_eq!(fs::read_to_string(dir.join(MAP_FILE_NAME)).unwrap(), before);
+        // 空表文件（仅表头）→ Intact { entries: 0 }
+        fs::write(dir.join(MAP_FILE_NAME), MAP_HEADER).unwrap();
+        match status(&dir) {
+            MapStatus::Intact { entries } => assert_eq!(entries, 0),
+            other => panic!("expected Intact(0), got {other:?}"),
+        }
+        // 损坏 → Corrupt（不 panic、不删文件）
+        fs::write(dir.join(MAP_FILE_NAME), "garbage-not-tsv").unwrap();
+        assert!(matches!(status(&dir), MapStatus::Corrupt(_)));
+        assert!(dir.join(MAP_FILE_NAME).exists());
         let _ = fs::remove_dir_all(&dir);
     }
 }
