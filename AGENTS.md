@@ -4,7 +4,8 @@
 
 tbg-lite：零注入单文件 Windows 10/11 任务栏分组工具（Rust）。用 Shell 公开属性存储
 API（`SHGetPropertyStoreForWindow` + `PKEY_AppUserModel_ID`）改写运行中窗口的分组
-归属，不注入任何进程。实现路线与任务拆分见 `docs/plan.md`（路线 B+，§4）。
+归属，不注入任何进程。实现路线与任务拆分见 `docs/plan.md`（v2，§2 路线 /
+§3 任务清单）。
 
 **双线路并行开发（2026-09-22 维护者决策）**：两条策略线路同时开工、同等维护，
 通过 CLI 参数切换（任务 8 已实现：`watch --strategy ungroup|group`）——
@@ -16,10 +17,11 @@ API（`SHGetPropertyStoreForWindow` + `PKEY_AppUserModel_ID`）改写运行中�
   `restore` 据此复原。
 
 两线路标记互斥、`--dry-run` 通用；`restore` 同时覆盖两线路还原路径。
-Phase 0b（任务 5-9）已完成，`runtime-smoke` CI 绿灯（12 项断言）。
-plan.md §7 Phase 1-3 原文为路线 A（注入 hook 移植），与本项目零注入红线
-冲突；按本决策，后续任务一律在双线路 B+ 范围内立项（plan.md 对应章节待重写，
-未重写前以本节为准）。
+Phase 0b（任务 5-10）已验收：runtime-smoke 12 项断言 + phase0b-acceptance
+29 项断言全绿（docs/phase0b-acceptance.md），UIA 证实双线路任务栏层效果。
+据此：非注入 B+ 为主要路线，注入 A 为备用（plan v2 §5，不实现）；
+默认行为 = Disable grouping on the taskbar，无排除列表；后续任务一律
+按 plan v2 §3 任务清单立项。
 
 ## 构建 / 测试 / lint 命令
 
@@ -56,7 +58,8 @@ plan.md §7 Phase 1-3 原文为路线 A（注入 hook 移植），与本项目�
 - `.github/workflows/ci.yml` —— 唯一 CI workflow：`build`（release 编译门禁）
   + `runtime-smoke`（任务 9：运行时冒烟）+ `phase0b-acceptance`
   （任务 10：Phase 0b 验收）三个 job
-- `docs/plan.md` —— 实施计划与任务号（提交一一对应任务号）
+- `docs/plan.md` —— 实施计划 v2（§0 决策 / §3 任务清单；提交一一对应任务号）
+- `docs/phase0b-acceptance.md` —— Phase 0b 验收报告（CI 量化证据与真机待验清单）
 - `README.md` —— 对外项目定位
 
 ## 完成的定义（DoD）
@@ -84,10 +87,10 @@ plan.md §7 Phase 1-3 原文为路线 A（注入 hook 移植），与本项目�
 ## 条件路由
 
 - 改 CI 或构建命令 → 先读 `.github/workflows/ci.yml`
-- 改依赖或 release profile → 读 `Cargo.toml` 与 docs/plan.md §6 预算表
-- 实现新功能 → 在 docs/plan.md（§4 路线 B+、§7 Phase 0b/1/2/3）找到对应任务号，
-  按任务号实现并单独提交；Phase 1-3 的路线 A 条目须先按“项目定位”双线路
-  决策改写为 B+ 范围再立项，注入类条目不实现
+- 改依赖或 release profile → 读 `Cargo.toml`；体积/内存口径参考
+  docs/phase0b-acceptance.md §4（v1 §6 预算表已随 v1 存档于 git 历史）
+- 实现新功能 → 在 docs/plan.md v2 §3 任务清单找到对应任务号，按任务号实现
+  并单独提交；注入类条目不实现（路线 A 为备用，见 plan v2 §5）
 - 改双线路行为 → 读 src/winevent.rs（apply_ungroup / apply_group）与
   src/appid.rs（标记定义），确认互斥标记与 restore 双路径不被破坏
 - 改本文件 → 增量合并，不覆盖既有规则
@@ -98,5 +101,4 @@ plan.md §7 Phase 1-3 原文为路线 A（注入 hook 移植），与本项目�
 - `cargo build`（debug）未验证
 - 发布流程未定（建议默认：暂不发布，后续手动 tag + GitHub Release）
 - LICENSE 未定（建议默认：MIT）
-- 配置文件路径未定（建议默认：exe 同目录 `config.toml`）
-- docs/plan.md Phase 1-3 按双线路 B+ 范围重写（2026-09-22 决策后的待办）
+- 配置文件路径未定（建议默认：exe 同目录 `config.toml`；若引入见 plan v2 §6-2）
