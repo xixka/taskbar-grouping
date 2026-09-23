@@ -11,12 +11,15 @@
 //! 交互菜单（`src/menu.rs`，含退出项，取代 Ctrl+C 方案），带参数
 //! 启动 → CLI 行为不变；任务 19（Phase 3）：`install` / `uninstall` /
 //! `status`——HKCU Run 开机自启（无需管理员）与状态速览（自启命令、
-//! 标记窗口计数、映射表状态）（docs/plan.md v2 §3）。
+//! 标记窗口计数、映射表状态）；任务 16（Phase 2）：`pin`——为线路二
+//! 分组生成带 `TBG.Group.<NAME>` AUMID 的 `.lnk` 固定磁贴
+//! （docs/plan.md v2 §3）。
 
 mod appid;
 mod autostart;
 mod menu;
 mod restoremap;
+mod shortcut;
 mod singleinstance;
 mod winevent;
 mod winutil;
@@ -40,6 +43,8 @@ USAGE:
     tbg-lite install [--strategy <ungroup|group>] [--group <NAME>]
     tbg-lite uninstall
     tbg-lite status
+    tbg-lite pin --group <NAME> --target <PATH> [--icon <PATH[,INDEX]>]
+                 [--args <STR>] [--out <DIR>]
 
 COMMANDS:
     (menu)    launched with NO arguments (task 14): interactive menu —
@@ -69,8 +74,9 @@ COMMANDS:
                                      (incl. pre-existing) to the shared
                                      AUMID TBG.Group.<NAME> (custom
                                      grouping; requires --group; originals
-                                     are persisted to tbg-restore.tsv
-                                     next to the exe)
+                                     are persisted to
+                                     %LOCALAPPDATA%\\tbg-lite\\tbg-restore.tsv
+                                     for restore)
               --duration <SECS>  run length (default 60; 0 = until stopped:
                                  menu mode exits gracefully via the stop
                                  flag; CLI mode Ctrl+C is a hard exit)
@@ -99,9 +105,26 @@ COMMANDS:
               'not installed'), marked-window counters per strategy line,
               and the restore map (entries / absent / corrupt). Read-only:
               never creates, migrates or rewrites the map
+    pin       create a taskbar tile .lnk for a line-2 group (task 16,
+              mklnkwaumid-style): the shortcut carries the shared AUMID
+              TBG.Group.<NAME> so that windows rewritten by
+              `watch --strategy group --group <NAME>` merge with the tile
+              once it is pinned; the AUMID is read back from the saved
+              file and verified before success is reported
+              --group <NAME>        group name (same charset as watch)
+              --target <PATH>       existing file the tile launches
+              --icon <PATH[,INDEX]> custom icon (INDEX may be negative =
+                                    resource id); default = the target
+                                    program's own icon
+              --args <STR>          arguments passed to the target
+              --out <DIR>           output directory (default
+                                    %LOCALAPPDATA%\\tbg-lite\\pin); file
+                                    name is always <NAME>.lnk and re-running
+                                    replaces it (task 17 will pin it to the
+                                    taskbar automatically)
 
 STATUS:
-    tasks 5-14 + 19 done; task 15 template shipped (real-machine matrix
+    tasks 5-14, 16 + 19 done; task 15 template shipped (real-machine matrix
     pending maintainer fill) — see docs/plan.md v2 §3
 ";
 
@@ -139,6 +162,7 @@ fn main() -> ExitCode {
         Some("install") => report(cmd_install(&args[1..])),
         Some("uninstall") => report(cmd_uninstall(&args[1..])),
         Some("status") => report(cmd_status(&args[1..])),
+        Some("pin") => report(cmd_pin(&args[1..])),
         Some(other) => {
             eprintln!("tbg-lite: unknown command '{other}' (see --help)");
             ExitCode::from(2)
@@ -861,5 +885,118 @@ fn cmd_status(args: &[String]) -> Result<(), String> {
         }
         Err(e) => println!("restore map: unavailable ({e})"),
     }
+    Ok(())
+}
+
+/// 任务 16（Phase 2）：生成带共享 AUMID `TBG.Group.<NAME>` 的 `.lnk` 固定
+/// 磁贴。参数校验（usage → 退出码 2）：组名走 `group_aumid`、`--target`
+/// 必须是已存在文件、`--icon` 规格可解析且文件存在、`--args` 无控制字符；
+/// 运行时错误（COM/IO，退出码 1）由 `shortcut::create_pin` 以 `pin: ` 前缀
+/// 上抛。成功输出磁贴路径、回读验证过的 AUMID 与目标/图标来源。
+fn cmd_pin(args: &[String]) -> Result<(), String> {
+    let mut group: Option<String> = None;
+    let mut target: Option<String> = None;
+    let mut icon: Option<String> = None;
+    let mut cmd_args: Option<String> = None;
+    let mut out: Option<String> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--group" => group = Some(next_arg(&mut it, "--group")?.clone()),
+            "--target" => target = Some(next_arg(&mut it, "--target")?.clone()),
+            "--icon" => icon = Some(next_arg(&mut it, "--icon")?.clone()),
+            "--args" => cmd_args = Some(next_arg(&mut it, "--args")?.clone()),
+            "--out" => out = Some(next_arg(&mut it, "--out")?.clone()),
+            other => return Err(format!("usage: pin: unknown argument '{other}'")),
+        }
+    }
+    let group_name = group.ok_or("usage: pin: --group <NAME> is required")?;
+    let target_raw = target.ok_or("usage: pin: --target <PATH> is required")?;
+    // 组名与 watch/install 同一校验器（字符集 [A-Za-z0-9._-]，1..=32）
+    let aumid = appid::group_aumid(&group_name).map_err(|e| format!("usage: pin: {e}"))?;
+    // 图标规格（宽容式逗号切分，见 shortcut::parse_icon_spec）
+    let icon_spec = match &icon {
+        Some(spec) => Some(
+            shortcut::parse_icon_spec(spec)
+                .map_err(|e| format!("usage: pin: invalid --icon '{spec}': {e}"))?,
+        ),
+        None => None,
+    };
+    // 目标必须是已存在文件（磁贴要能启动它；目录不是有效目标）
+    let target_path = std::path::Path::new(&target_raw);
+    if !target_path.is_file() {
+        return Err(format!(
+            "usage: pin: --target '{target_raw}' is not an existing file"
+        ));
+    }
+    if let Some((icon_file, _)) = &icon_spec {
+        if !std::path::Path::new(icon_file).is_file() {
+            return Err(format!(
+                "usage: pin: --icon file '{icon_file}' not found"
+            ));
+        }
+    }
+    // 参数串不做语义解释，但拦控制字符（与 set --value 同口径，防破坏
+    // .lnk 结构可读性）
+    if let Some(a) = &cmd_args {
+        if a.chars().any(|c| (c as u32) < 0x20) {
+            return Err("usage: pin: --args must not contain control characters".into());
+        }
+    }
+    // 规范化：canonicalize（解析为绝对路径）+ 去 \\?\ 前缀/折叠 .. 段
+    // （注册表同款词典法，autostart::normalize_win_path）
+    let canonical = |p: &std::path::Path, what: &str| -> Result<String, String> {
+        std::fs::canonicalize(p)
+            .map(|c| autostart::normalize_win_path(&c.to_string_lossy()))
+            .map_err(|e| format!("pin: cannot resolve {what} ({}): {e}", p.display()))
+    };
+    let target_norm = canonical(target_path, "--target")?;
+    let icon_norm = match &icon_spec {
+        Some((icon_file, idx)) => Some((canonical(std::path::Path::new(icon_file), "--icon")?, *idx)),
+        None => None,
+    };
+    // 输出目录：--out 或数据目录下的 pin 子目录；文件名恒 <组名>.lnk
+    let out_dir = match &out {
+        Some(d) => std::path::PathBuf::from(d),
+        None => shortcut::pin_dir(&restoremap::data_dir().map_err(|e| format!("pin: {e}"))?),
+    };
+    let out_path = out_dir.join(shortcut::lnk_file_name(&group_name));
+    std::fs::create_dir_all(&out_dir).map_err(|e| {
+        format!(
+            "pin: cannot create output directory ({}): {e}",
+            out_dir.display()
+        )
+    })?;
+    // COM（属性存储 + ShellLink 均为 COM 调用）
+    let _com = winutil::ComGuard::init()?;
+    let outcome = unsafe {
+        shortcut::create_pin(
+            &aumid,
+            &target_norm,
+            cmd_args.as_deref(),
+            icon_norm.as_ref().map(|(p, i)| (p.as_str(), *i)),
+            &out_path,
+        )?
+    };
+    println!(
+        "pin       : {} ({})",
+        outcome.path.display(),
+        if outcome.replaced { "replaced existing file" } else { "new file" }
+    );
+    println!(
+        "aumid     : {} (read back from the saved .lnk: verified)",
+        outcome.aumid
+    );
+    println!("target    : {target_norm}");
+    match &icon_norm {
+        Some((p, i)) => println!("icon      : {p},{i}"),
+        None => println!("icon      : target's own icon (default)"),
+    }
+    if let Some(a) = &cmd_args {
+        println!("args      : {a}");
+    }
+    println!(
+        "note      : drag the .lnk onto the taskbar to pin it visually; automated pinning is task 17"
+    );
     Ok(())
 }

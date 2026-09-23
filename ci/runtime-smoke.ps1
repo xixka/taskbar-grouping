@@ -25,6 +25,14 @@
 #             three state blocks, install --strategy group overwrites the
 #             value (line 2), uninstall verified idempotent, usage error
 #             (group without --group) exits 2.
+#   Phase P - task 16 pin (.lnk tile): a shortcut carrying the shared
+#             AUMID TBG.Group.<NAME> is generated for a notepad target;
+#             the tool self-verifies by reloading the saved file (the
+#             'aumid ... verified' output line), the .lnk lands in the
+#             default %LOCALAPPDATA%\tbg-lite\pin directory and in a
+#             custom --out directory with --icon, re-running replaces the
+#             tile, and usage errors (no args / bad group / missing target
+#             / nonexistent target / bad icon spec) exit 2.
 #   Phase C - explorer/taskbar feasibility probe (best effort, no
 #             assertions): screenshots only, to see whether a real taskbar
 #             can be hosted in this session.
@@ -506,6 +514,67 @@ try {
 } finally {
   # never leave the autostart value behind on the runner
   Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'tbg-lite' -ErrorAction SilentlyContinue
+}
+
+# --------------------------- phase P: pin .lnk tile generation (task 16)
+# The tile shortcut carries the line-2 shared AUMID so that pinned tiles
+# and live windows merge (task 18 asserts the live-window side). Here:
+# happy paths (default dir, --icon + --out custom dir, overwrite) all
+# gated on the read-back verification line; usage errors exit 2.
+try {
+  Log '=== Phase P: pin - .lnk tile with the group AUMID (task 16) ==='
+  $notepadExe = Join-Path $env:WINDIR 'System32\notepad.exe'
+  $shell32    = Join-Path $env:WINDIR 'System32\shell32.dll'
+  $pinDir     = Join-Path $env:LOCALAPPDATA 'tbg-lite\pin'
+  $pinPath    = Join-Path $pinDir 'pinsmoke.lnk'
+  # defensive pre-clean (not an assertion): never inherit a stale tile
+  Remove-Item $pinPath -ErrorAction SilentlyContinue
+
+  # --- usage errors: exit code 2 (stderr captured via Start-Watch) ---
+  $u1 = Start-Watch @('pin') 'pin-usage-noargs.log'
+  $null = $u1.WaitForExit(30000); $u1.WaitForExit(); Flush-WatchLogs $u1
+  Assert ($u1.ExitCode -eq 2) "pin usage: no arguments exits 2 (got $($u1.ExitCode))"
+  $u1err = Get-Content (Join-Path $out 'pin-usage-noargs.err.log') -Raw
+  Assert ($u1err -cmatch 'usage:') 'pin usage: no arguments, stderr carries the usage message'
+
+  $u2 = Start-Watch @('pin','--group','pinsmoke') 'pin-usage-notarget.log'
+  $null = $u2.WaitForExit(30000); $u2.WaitForExit(); Flush-WatchLogs $u2
+  Assert ($u2.ExitCode -eq 2) "pin usage: missing --target exits 2 (got $($u2.ExitCode))"
+
+  $u3 = Start-Watch @('pin','--group','bad name','--target',$notepadExe) 'pin-usage-badgroup.log'
+  $null = $u3.WaitForExit(30000); $u3.WaitForExit(); Flush-WatchLogs $u3
+  Assert ($u3.ExitCode -eq 2) "pin usage: invalid group name exits 2 (got $($u3.ExitCode))"
+
+  $u4 = Start-Watch @('pin','--group','pinsmoke','--target','C:\definitely\missing.exe') 'pin-usage-badtarget.log'
+  $null = $u4.WaitForExit(30000); $u4.WaitForExit(); Flush-WatchLogs $u4
+  Assert ($u4.ExitCode -eq 2) "pin usage: nonexistent --target exits 2 (got $($u4.ExitCode))"
+
+  # --- happy path 1: default output directory, no --icon ---
+  $pin1 = & $exe pin --group pinsmoke --target "$notepadExe" | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($pin1 -cmatch 'aumid\s*:\s*TBG\.Group\.pinsmoke') -and ($pin1 -cmatch 'verified')) 'pin: default output exits 0, AUMID read back from the .lnk and verified'
+  Assert (Test-Path $pinPath) "pin: tile created at the default location ($pinPath)"
+  Assert ((Test-Path $pinPath) -and ((Get-Item $pinPath).Length -gt 0)) 'pin: tile .lnk file is non-empty'
+
+  # --- happy path 2: --icon with index + custom --out directory ---
+  $customDir = Join-Path $out 'pin-custom'
+  $pin2 = & $exe pin --group pinsmoke --target "$notepadExe" --icon "$shell32,2" --out "$customDir" | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($pin2 -cmatch 'verified')) 'pin: --icon + --out exits 0 and verifies'
+  Assert (Test-Path (Join-Path $customDir 'pinsmoke.lnk')) 'pin: tile written to the custom --out directory'
+
+  # --- overwrite: re-run replaces the existing tile (install semantics) ---
+  $pin3 = & $exe pin --group pinsmoke --target "$notepadExe" --icon "$shell32" | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($pin3 -cmatch 'replaced existing file') -and ($pin3 -cmatch 'verified')) 'pin: re-run overwrites the existing tile and still verifies'
+
+  # --- bad icon spec: file-not-found surfaces as a usage error ---
+  $u5 = Start-Watch @('pin','--group','pinsmoke','--target',$notepadExe,'--icon','C:\no\such.ico,zz') 'pin-usage-badicon.log'
+  $null = $u5.WaitForExit(30000); $u5.WaitForExit(); Flush-WatchLogs $u5
+  Assert ($u5.ExitCode -eq 2) "pin usage: nonexistent --icon file exits 2 (got $($u5.ExitCode))"
+} catch {
+  Fail "phase P crashed: $($_.Exception.Message)"
+  Log $_.ScriptStackTrace
+} finally {
+  # hygiene: never leave test tiles behind on the runner (not an assertion)
+  Remove-Item (Join-Path $env:LOCALAPPDATA 'tbg-lite\pin\pinsmoke.lnk') -ErrorAction SilentlyContinue
 }
 
 # --------------------------- phase C: explorer/taskbar feasibility probe

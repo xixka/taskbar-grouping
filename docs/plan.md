@@ -21,18 +21,20 @@
    可选先还原）；带参数启动 = CLI 行为不变。原任务的 Ctrl+C console
    control handler 与 `--restore-on-exit` 参数方案作废。
 
-## §1 现状（截至任务 19，含 Phase R 22-26）
+## §1 现状（截至任务 16/19，含 Phase R 22-26）
 
-- 已完成任务 0–14、19 与审计修复 22–26（每任务一提交，见 git log）；任务 15
-  模板已建（真机填写待维护者）：CLI 七命令（`inspect` / `set` / `watch`
-  双线路 / `restore` 双路径 / `install` / `uninstall` / `status`）、事件驱动
+- 已完成任务 0–14、16、19 与审计修复 22–26（每任务一提交，见 git log）；任务 15
+  模板已建（真机填写待维护者）：CLI 八命令（`inspect` / `set` / `watch`
+  双线路 / `restore` 双路径 / `install` / `uninstall` / `status` / `pin`
+  ——任务 16：为线路二分组生成带 `TBG.Group.<NAME>` AUMID 的 `.lnk` 固定
+  磁贴，落盘回读自校验）、事件驱动
   （SetWinEventHook 零注入）、线路二还原映射（`tbg-restore.tsv`，防 HWND
   复用）、启动扫存量（任务 13：开启即全量取消分组，对齐 mod 默认）、无参数
   交互菜单（任务 14：菜单启动/停止 watch、还原、inspect、退出，无需
   Ctrl+C）、开机自启三命令（任务 19：HKCU Run，无需管理员；`status` 速览
   自启/标记窗口/映射表）、审计修复（原子写/单实例/标记严格校验/钉 SHA 等）；
   CI 四 job
-  （`build` 编译+单测门禁 / `lockfile` 新鲜度 / `runtime-smoke` 47 断言 /
+  （`build` 编译+单测门禁 / `lockfile` 新鲜度 / `runtime-smoke` 59 断言 /
   `phase0b-acceptance` 30 断言）。
 - 验收关键数据（详见验收报告）：双线路 50 窗口压测 0 漏检 0 回写 0 写失败；UIA 证实
   线路一每窗口独立按钮、线路二 50 窗合并单组、还原回原生；工作集 9.15 MB；explorer
@@ -77,9 +79,21 @@
 
 ### Phase 2 — .lnk 固定磁贴配套（自定义分组的固定形态）
 
-- [ ] **任务 16**：`pin` 命令——为指定组生成带 `TBG.Group.<name>` AUMID 的 `.lnk`
+- [x] **任务 16**：`pin` 命令——为指定组生成带 `TBG.Group.<name>` AUMID 的 `.lnk`
       （`IShellLinkW` + `IPropertyStore`，参考 aumid-stopgap-tools `mklnkwaumid` 的
       直译，约 150 行）；`--icon` 指定组图标（默认取组内主程序）。
+      完成：`src/shortcut.rs`——CoCreateInstance(ShellLink) → SetPath/
+      SetIconLocation/SetArguments/SetDescription → QI IPropertyStore 写
+      PKEY_AppUserModel_ID + Commit → QI IPersistFile::Save；落盘后独立
+      Load 回读自校验（`read_lnk_aumid`，任务 18 同组断言复用此读路径）；
+      CLI `pin --group <NAME> --target <PATH> [--icon <PATH[,INDEX]>]
+      [--args <STR>] [--out <DIR>]`（图标规格宽容式逗号切分、目标/图标
+      必须存在、路径词典法规范化；重跑覆盖与 install 同语义）；默认输出
+      `%LOCALAPPDATA%\tbg-lite\pin\<NAME>.lnk`；不触碰还原表故不参与
+      单实例互斥。CI runtime-smoke 新增 Phase P（12 断言：用法错误×5、
+      默认/自定义目录落盘×4、覆盖重跑、回读验证），断言 47→59；新增 5 项
+      纯逻辑单元测试（图标规格×4 + 磁贴文件名/目录拼接），单测 33→38。
+      实际固定到任务栏（写入用户固定目录 / shell 固定 API）属任务 17。
 - [ ] **任务 17**：固定到任务栏——写入用户固定目录（`%AppData%\Microsoft\Internet
       Explorer\Quick Launch\User Pinned\TaskBar`）或经 shell 固定 API；`unpin` 反向。
 - [ ] **任务 18**：线路二 × 固定磁贴联动验收——CI 断言 `.lnk` 的 AUMID 与运行中窗口
@@ -153,7 +167,7 @@ DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任
 | 层面 | 方法 |
 |---|---|
 | 编译门禁 | CI `build`（windows-latest，`cargo build --release --locked` + `cargo test --locked`，任务 22b/23） |
-| 双线路行为回归 | CI `runtime-smoke`（47 断言，含启动扫存量、交互菜单与自启 Phase I）+ `phase0b-acceptance`（30 断言），每次 push |
+| 双线路行为回归 | CI `runtime-smoke`（59 断言，含启动扫存量、交互菜单、自启 Phase I 与 pin Phase P）+ `phase0b-acceptance`（30 断言），每次 push |
 | 固定磁贴联动 | CI 断言（任务 18） |
 | 真机清单 | 竞态感知率、覆盖矩阵全量、长时回写、视觉细节、explorer 重启（验收报告 §5） |
 | 内存/体积 | 验收报告口径；发布前回填 `BENCHMARK.md`（任务 21） |

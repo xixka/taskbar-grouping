@@ -22,6 +22,12 @@ entry (no admin rights) whose command is the current exe running `watch`
 along the chosen line with `--duration 0`; `uninstall` is idempotent;
 `status` gives a read-only one-glance view (autostart command, marked-window
 counters per line, restore-map state).
+`pin --group <NAME> --target <PATH> [--icon ...] [--out <DIR>]` (task 16)
+generates a taskbar tile `.lnk` carrying the group's shared AUMID
+(`%LOCALAPPDATA%\tbg-lite\pin\<NAME>.lnk` by default, replaced on re-run);
+the AUMID is read back from the saved file and verified before success is
+reported — pinned tiles and live windows share the AUMID so the taskbar
+merges them.
 Launched with **no arguments**, tbg-lite opens an interactive menu (task 14):
 start/stop the watch on either strategy line, restore all, inspect windows,
 and exit through menu option `[0]` — no Ctrl+C needed; stopping the watch
@@ -30,12 +36,13 @@ from the menu is graceful (hooks removed, stats printed).
 - Implementation plan and task breakdown: [`docs/plan.md`](docs/plan.md) (route B+, v2)
 - Phase 0b acceptance evidence: [`docs/phase0b-acceptance.md`](docs/phase0b-acceptance.md)
 - CI (windows-latest): `cargo build --release --locked` + unit tests + a
-  47-assertion runtime smoke (incl. the interactive menu via stdin and the
-  HKCU-Run autostart phase) and a 30-assertion acceptance suite, both running
+  59-assertion runtime smoke (incl. the interactive menu via stdin, the
+  HKCU-Run autostart phase and the .lnk tile pin phase) and a 30-assertion
+  acceptance suite, both running
   against real windows in the runner session. Taskbar visuals / race
   perception / multi-app coverage still need real-machine validation
   (template: [`docs/coverage-matrix.md`](docs/coverage-matrix.md)).
 
-Status: tasks 0-14, 19 complete + audit remediation Phase R (22-26); task 15
-(real-machine coverage matrix) template shipped, awaiting maintainer fill —
-see the task list in [`docs/plan.md`](docs/plan.md) v2 §3.
+Status: tasks 0-14, 16, 19 complete + audit remediation Phase R (22-26);
+task 15 (real-machine coverage matrix) template shipped, awaiting
+maintainer fill — see the task list in [`docs/plan.md`](docs/plan.md) v2 §3.
