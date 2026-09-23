@@ -79,10 +79,12 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   explorer 重启检测+重扫+钩子存续、三轮强杀后熔断注销自启）；104 项
   断言；仅由 CI 执行，
   本地未验证。
-- `ci/phase0b-accept.ps1` —— CI Phase 0b 验收套件（任务 10，
+- `ci/phase0b-accept.ps1` —— CI Phase 0b 验收套件（任务 10 + 15，
   `phase0b-acceptance` job）：双线路各 50 窗口压测 + 常驻内存 <10MB 判定
-  （门禁）；多应用覆盖子集、Edge 回写探针、UIA 任务栏按钮枚举
-  （证据性探针，不设门禁）；结论见 docs/phase0b-acceptance.md；
+  （门禁）；多应用覆盖（任务 15 扩展：notepad/mspaint/cmd/PowerShell
+  控制台/regedit/Windows Terminal assert-if-spawned 门禁，powershell/WT
+  按 PID 定点清理防误杀 CI 宿主）、Edge 回写探针、UIA 任务栏按钮枚举；
+  结论见 docs/phase0b-acceptance.md 与 docs/coverage-matrix.md；
   仅由 CI 执行，本地未验证。
 - 禁止本地执行 cargo 构建/运行（本地无 Rust 工具链，且维护者明确禁止）；一切编译
   验证走 CI。
@@ -150,9 +152,10 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   （任务 9：运行时冒烟）+ `phase0b-acceptance`（任务 10：Phase 0b 验收）
   四个 job
 - `docs/plan.md` —— 实施计划 v2（§0 决策 / §3 任务清单；提交一一对应任务号）
-- `docs/coverage-matrix.md` —— 多应用覆盖矩阵真机记录表（任务 15 模板：应用 ×
-  线路 × 生效/回写/竞态主表 + 竞态/长时/视觉/explorer 重启四专项 + §8 裁决
-  回填框架；维护者真机填写，结论决定 B+ 是否持续为主）
+- `docs/coverage-matrix.md` —— 多应用覆盖矩阵记录表（任务 15 已回填关闭：
+  维护者 2026-09-23 指令"CI 测试等同真机测试"，CI 行即真机行；§8 裁决
+  B+ 持续为主——用户应用覆盖 7/7=100%、竞态 0%；唯一 0 分行 = shell 自管
+  Explorer 文件夹窗口已知限制，严格全行口径 87.5% 已透明记录）
 - `docs/phase0b-acceptance.md` —— Phase 0b 验收报告（CI 量化证据与真机待验清单）
 - `README.md` —— 对外项目定位
 

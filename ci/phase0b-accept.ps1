@@ -20,6 +20,11 @@
 #   Phase D - multi-app coverage subset, line 1: notepad/mspaint/cmd
 #             assert-if-spawned; explorer folder windows log-only (shell
 #             windows may self-manage AUMID by design - evidence only).
+#             Task 15 (2026-09-23, maintainer: CI runs count as real-machine
+#             runs): + Windows PowerShell console / regedit / Windows
+#             Terminal (assert-if-spawned) to broaden the coverage matrix
+#             executed on the runner; powershell/wt are cleaned up by PID
+#             (killing them by name would kill the CI step itself).
 #   Phase E - Edge/Chromium revert probe (LOG-ONLY): Chromium self-manages
 #             its AUMID; probe whether our rewrite survives 6 s after the
 #             watch exits. Known-risk evidence, intentionally non-gating.
@@ -131,10 +136,15 @@ function Wait-Watch([System.Diagnostics.Process]$proc, [int]$timeoutSec) {
 }
 
 function Clear-TestWindows {
-  foreach ($n in @('notepad', 'mspaint', 'cmd', 'tbg-lite', 'msedge')) {
+  foreach ($n in @('notepad', 'mspaint', 'cmd', 'tbg-lite', 'msedge', 'regedit')) {
     Get-Process -Name $n -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
   }
 }
+
+# Task 15: processes that must NEVER be killed by name (powershell.exe /
+# WindowsTerminal.exe host the CI step itself) - collected during Phase D
+# discovery and terminated by PID in the phase's finally block.
+$specialPids = @()
 
 # --- app-window discovery via our own `inspect --json` (task 25, audit
 # BUG-14: fixed-width column slicing broke on non-ASCII titles; JSON is
@@ -395,7 +405,7 @@ try {
 # --------------------------- Phase D: multi-app coverage subset ------------
 try {
   Log '=== Phase D: multi-app coverage subset (line 1) ==='
-  $watch = Start-Watch @('watch', '--duration', '100', '--strategy', 'ungroup', '--verbose') 'acc-watch-multiapp.log'
+  $watch = Start-Watch @('watch', '--duration', '150', '--strategy', 'ungroup', '--verbose') 'acc-watch-multiapp.log'
   Start-Sleep -Seconds 2
   $specs = @(
     @{ Name = 'notepad';  Count = 2; LogOnly = $false
@@ -407,6 +417,15 @@ try {
     @{ Name = 'cmd';      Count = 2; LogOnly = $false
        Classes = @('*ConsoleWindowClass*', '*CASCADIA*'); Titles = @()
        Launch = { Start-Process -FilePath 'cmd.exe' } },
+    @{ Name = 'powershell-console'; Count = 2; LogOnly = $false
+       Classes = @('*ConsoleWindowClass*', '*CASCADIA*'); Titles = @()
+       Launch = { Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoExit' } },
+    @{ Name = 'regedit';  Count = 1; LogOnly = $false
+       Classes = @('RegEdit_RegEdit'); Titles = @()
+       Launch = { Start-Process -FilePath 'regedit.exe' } },
+    @{ Name = 'windows-terminal'; Count = 1; LogOnly = $false
+       Classes = @('*CASCADIA_HOSTING_WINDOW_CLASS*'); Titles = @()
+       Launch = { Start-Process -FilePath 'wt.exe' } },
     @{ Name = 'explorer'; Count = 2; LogOnly = $true
        Classes = @('*CabinetWClass*'); Titles = @()
        Launch = { Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$env:TEMP`"" } }
@@ -428,9 +447,14 @@ try {
     } else {
       Log ("multi-app '{0}': {1}/{2} window(s) discovered" -f $s.Name, $found.Count, $s.Count)
       $results += [pscustomobject]@{ Name = $s.Name; LogOnly = $s.LogOnly; Wins = $found }
+      # 任务 15：不能按名杀的进程（powershell/WindowsTerminal 宿主着 CI 步骤
+      # 本身）收集 PID，阶段末按 PID 定点清理
+      if ($s.Name -in @('powershell-console', 'windows-terminal')) {
+        foreach ($w in $found) { $specialPids += $w.Pid }
+      }
     }
   }
-  Wait-Watch $watch 150
+  Wait-Watch $watch 220
   $log = Get-WatchLog 'acc-watch-multiapp.log'
   $missed = Get-WatchStat $log 'missed \(new app w/o marker\)\s+:\s+(\d+)'
   Assert ($missed -eq 0) "multi-app: no discovered window missed by watch (stats: $missed)"
@@ -463,6 +487,11 @@ try {
   Fail "phase D crashed: $($_.Exception.Message)"
   Log $_.ScriptStackTrace
 } finally {
+  # task 15: kill the by-name-unsafe processes by PID first (powershell /
+  # WindowsTerminal host this very CI step), then the usual by-name sweep
+  foreach ($p in $specialPids) {
+    Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
+  }
   Clear-TestWindows
 }
 
