@@ -154,7 +154,8 @@ mod tests {
     fn account_short_abnormal_exit_increments() {
         // 上轮 running 起 10s 后消失（本 begin 时刻 = start+10）→ +1
         assert_eq!(account(1000, Some(990), 0), (1, false));
-        assert_eq!(account(1000, Some(975), 2), (3, true)); // 达阈值 → 熔断且归零
+        // 2 + 1 = 3 达阈值 → 熔断且归零（streak 重置，防每次运行重复告警）
+        assert_eq!(account(1000, Some(975), 2), (0, true));
     }
 
     #[test]
