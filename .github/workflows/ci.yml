@@ -2,8 +2,10 @@ name: ci
 
 on:
   push:
-    # 任务 21：tag 触发 release（v0.1.0+）；普通 push 走四 job 验证，
-    # tag push 额外产出发布物（zip + SHA256 + build-provenance attestation）
+    # 任务 21：分支推送（四 job 验证，维持既有门禁不弱化）+ tag 推送
+    # （v* 额外产出发布物：zip + SHA256 + build-provenance attestation，
+    # release job needs 四 job 全绿才执行）
+    branches: ['**']
     tags: ['v*']
   workflow_dispatch:
 
