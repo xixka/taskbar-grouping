@@ -30,9 +30,12 @@
 #             single-instance; force-killing the hosting WindowsTerminal.exe
 #               takes the session console with it) - WT coverage stays a
 #               maintainer real-machine item instead.
-#   Phase E - Edge/Chromium revert probe (LOG-ONLY): Chromium self-manages
-#             its AUMID; probe whether our rewrite survives 6 s after the
-#             watch exits. Known-risk evidence, intentionally non-gating.
+#   Phase E - Edge/Chromium revert probe (LOG-ONLY, OPT-IN via
+#             TBG_EDGE_PROBE=1): Chromium self-manages its AUMID; probe
+#             whether our rewrite survives 6 s after the watch exits.
+#             Skipped in CI by default: the runner died with a shutdown
+#             signal at this point 4x (see the phase header). Historical
+#             evidence: run 35679966357, docs/phase0b-acceptance.md.
 #   UIA     - taskbar button dumps via Windows PowerShell 5.1 UIAutomation
 #             during line-1 stress / line-2 group / after restore
 #             (LOG-ONLY): taskbar-level evidence beyond AUMID values.
@@ -500,9 +503,20 @@ try {
 # --------------------------- Phase E: Edge/Chromium revert probe ----------
 # Log-only by design: Chromium self-manages its AUMID and may revert our
 # rewrite - this is exactly the risk the acceptance report needs evidence
-# for, not a gate.
+# for, not a gate. NO gated assertions live here.
+#
+# FIX ROUND 2 (2026-09-23): the runner died with a shutdown signal at this
+# exact point 4x in a row (runs 35810343047 / 35811737548 / 35812271701 /
+# 35813057776 - always ~25 ms after the phase banner, BEFORE Edge even
+# launches, with zero FAIL assertions and all gated phases A-D green;
+# removing wt.exe did not help). The historical Edge evidence from
+# run 35679966357 is preserved in docs/phase0b-acceptance.md. The phase is
+# now OPT-IN via TBG_EDGE_PROBE=1 (workflow_dispatch can set it); CI runs
+# skip it so the gated suite stays usable. Not a weakening: this phase
+# never carried a gate.
+if ($env:TBG_EDGE_PROBE -eq '1') {
 try {
-  Log '=== Phase E: Edge/Chromium revert probe (log-only) ==='
+  Log '=== Phase E: Edge/Chromium revert probe (log-only, opt-in) ==='
   $watch = Start-Watch @('watch', '--duration', '60', '--strategy', 'ungroup', '--verbose') 'acc-watch-edge.log'
   Start-Sleep -Seconds 2
   $before = @(Get-AppWindowList | ForEach-Object { $_.Hex })
@@ -545,6 +559,9 @@ try {
   Log "phase E probe issue (non-fatal): $($_.Exception.Message)"
 } finally {
   Clear-TestWindows
+}
+} else {
+  Log 'Phase E: Edge/Chromium revert probe SKIPPED (opt-in only, TBG_EDGE_PROBE=1; runner shutdown signal killed the job here 4x - see header note; historical evidence: run 35679966357 in docs/phase0b-acceptance.md)'
 }
 
 # ------------------------------------------------------------------- summary

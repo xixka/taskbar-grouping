@@ -77,7 +77,7 @@ CI 等价口径：压测 Phase（50 窗 × 75 s watch）覆盖时长底线；多
 | 3 | conhost | cmd 控制台 | ✅ 2/2（多应用 Phase D，门禁） | 0 | CI — | ✅（同机制） | 0 | ConsoleWindowClass |
 | 4 | 终端多标签 | Windows Terminal | 未测（CI 生成 WT 窗口会确定性杀死 Runner 会话宿主，三轮实锤 runs 35810343047/35811737548/35812271701；改维护者真机可选） | — | — | 未测 | — | 多标签=单 HWND；WT 单实例模型与 Runner 会话控制台宿主耦合，CI 不可安全拉起 |
 | 5 | shell 自管 | Explorer 文件夹窗口 | ❌回（2/2 写入成功，窗口关闭/操作后被 explorer 回写，验收报告 §3 实锤） | 实锤回写型 | — | ❌回（同机制） | 同左 | plan v2 §2 已知限制；shell 自管 AUMID 属设计行为 |
-| 6 | Chromium | Edge | ✅ 2/2（写入成功，watch 全程 + 6 s 探针不回写） | 长时未测（§5） | CI — | ✅（同机制） | 同左 | 自管 AUMID（MSEdge.edgeaccprofile.*）；长时见 §5 |
+| 6 | Chromium | Edge | ✅ 2/2（写入成功，watch 全程 + 6 s 探针不回写；证据 run 35679966357 存档） | 长时未测（§5） | CI — | ✅（同机制） | 同左 | 自管 AUMID（MSEdge.edgeaccprofile.*）；当前 Runner 镜像上 Edge 探针阶段会触发 runner 关机信号（4 轮实锤），探针改 opt-in（TBG_EDGE_PROBE=1），历史证据有效 |
 | 7 | 控制台宿主 | Windows PowerShell 控制台 | ✅ 2/2（Phase D 扩展，门禁；run 35811737548 日志实锤 PASS 后 Runner 死于 WT 清理） | 0 | CI — | ✅（同机制） | 0 | 与 cmd 同类窗口形态，独立进程验证；按 PID 定点清理防误杀 CI 宿主 |
 | 8 | 经典 Win32 | 注册表编辑器 regedit | ✅ 1/1（Phase D 扩展，assert-if-spawned 门禁；单实例应用） | 0 | CI — | ✅（同机制） | 0 | |
 | 9 | Chromium | Chrome | 未测（Runner 无此应用） | — | — | 未测 | — | 维护者真机可选补充 |
