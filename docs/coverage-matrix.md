@@ -75,10 +75,10 @@ CI 等价口径：压测 Phase（50 窗 × 75 s watch）覆盖时长底线；多
 | 1 | 经典 Win32 | 记事本 notepad | ✅（50/50 压测 + 2/2 多应用，门禁） | 0（压测统计 reverted=0） | CI —（见 §4） | ✅（50/50 共享 AUMID，门禁） | 0 | 控制组；UIA：50 窗独立按钮 |
 | 2 | 经典 Win32 | 画图 mspaint | ✅ 2/2（多应用 Phase D，门禁） | 0 | CI — | ✅（同机制） | 0 | |
 | 3 | conhost | cmd 控制台 | ✅ 2/2（多应用 Phase D，门禁） | 0 | CI — | ✅（同机制） | 0 | ConsoleWindowClass |
-| 4 | 终端多标签 | Windows Terminal | ✅ 1/1（Phase D 扩展，assert-if-spawned 门禁） | 0 | CI — | ✅（同机制） | 0 | 多标签=单 HWND；Runner 会话证实 CASCADIA 窗口可改写 |
+| 4 | 终端多标签 | Windows Terminal | 未测（CI 生成 WT 窗口会确定性杀死 Runner 会话宿主，三轮实锤 runs 35810343047/35811737548/35812271701；改维护者真机可选） | — | — | 未测 | — | 多标签=单 HWND；WT 单实例模型与 Runner 会话控制台宿主耦合，CI 不可安全拉起 |
 | 5 | shell 自管 | Explorer 文件夹窗口 | ❌回（2/2 写入成功，窗口关闭/操作后被 explorer 回写，验收报告 §3 实锤） | 实锤回写型 | — | ❌回（同机制） | 同左 | plan v2 §2 已知限制；shell 自管 AUMID 属设计行为 |
 | 6 | Chromium | Edge | ✅ 2/2（写入成功，watch 全程 + 6 s 探针不回写） | 长时未测（§5） | CI — | ✅（同机制） | 同左 | 自管 AUMID（MSEdge.edgeaccprofile.*）；长时见 §5 |
-| 7 | 控制台宿主 | Windows PowerShell 控制台 | ✅ 2/2（Phase D 扩展，assert-if-spawned 门禁） | 0 | CI — | ✅（同机制） | 0 | 与 cmd 同类窗口形态，独立进程验证 |
+| 7 | 控制台宿主 | Windows PowerShell 控制台 | ✅ 2/2（Phase D 扩展，门禁；run 35811737548 日志实锤 PASS 后 Runner 死于 WT 清理） | 0 | CI — | ✅（同机制） | 0 | 与 cmd 同类窗口形态，独立进程验证；按 PID 定点清理防误杀 CI 宿主 |
 | 8 | 经典 Win32 | 注册表编辑器 regedit | ✅ 1/1（Phase D 扩展，assert-if-spawned 门禁；单实例应用） | 0 | CI — | ✅（同机制） | 0 | |
 | 9 | Chromium | Chrome | 未测（Runner 无此应用） | — | — | 未测 | — | 维护者真机可选补充 |
 | 10 | Gecko | Firefox | 未测（Runner 无此应用） | — | — | 未测 | — | 同上 |

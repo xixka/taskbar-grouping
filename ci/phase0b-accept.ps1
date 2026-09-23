@@ -21,10 +21,15 @@
 #             assert-if-spawned; explorer folder windows log-only (shell
 #             windows may self-manage AUMID by design - evidence only).
 #             Task 15 (2026-09-23, maintainer: CI runs count as real-machine
-#             runs): + Windows PowerShell console / regedit / Windows
-#             Terminal (assert-if-spawned) to broaden the coverage matrix
-#             executed on the runner; powershell/wt are cleaned up by PID
-#             (killing them by name would kill the CI step itself).
+#             runs): + Windows PowerShell console / regedit (assert-if-
+#             spawned) to broaden the coverage matrix executed on the
+#             runner; powershell is cleaned up by PID (killing it by name
+#             would kill the CI step itself). NOTE: spawning wt.exe (Windows
+#             Terminal) here was tried and DETERMINISTICALLY killed the
+#             runner 3x (runs 35810343047 / 35811737548 / 35812271701: WT is
+#             single-instance; force-killing the hosting WindowsTerminal.exe
+#               takes the session console with it) - WT coverage stays a
+#               maintainer real-machine item instead.
 #   Phase E - Edge/Chromium revert probe (LOG-ONLY): Chromium self-manages
 #             its AUMID; probe whether our rewrite survives 6 s after the
 #             watch exits. Known-risk evidence, intentionally non-gating.
@@ -423,9 +428,6 @@ try {
     @{ Name = 'regedit';  Count = 1; LogOnly = $false
        Classes = @('RegEdit_RegEdit'); Titles = @()
        Launch = { Start-Process -FilePath 'regedit.exe' } },
-    @{ Name = 'windows-terminal'; Count = 1; LogOnly = $false
-       Classes = @('*CASCADIA_HOSTING_WINDOW_CLASS*'); Titles = @()
-       Launch = { Start-Process -FilePath 'wt.exe' } },
     @{ Name = 'explorer'; Count = 2; LogOnly = $true
        Classes = @('*CabinetWClass*'); Titles = @()
        Launch = { Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$env:TEMP`"" } }
@@ -447,9 +449,9 @@ try {
     } else {
       Log ("multi-app '{0}': {1}/{2} window(s) discovered" -f $s.Name, $found.Count, $s.Count)
       $results += [pscustomobject]@{ Name = $s.Name; LogOnly = $s.LogOnly; Wins = $found }
-      # 任务 15：不能按名杀的进程（powershell/WindowsTerminal 宿主着 CI 步骤
-      # 本身）收集 PID，阶段末按 PID 定点清理
-      if ($s.Name -in @('powershell-console', 'windows-terminal')) {
+      # 任务 15：不能按名杀的进程（powershell 宿主着 CI 步骤本身）收集
+      # PID，阶段末按 PID 定点清理
+      if ($s.Name -in @('powershell-console')) {
         foreach ($w in $found) { $specialPids += $w.Pid }
       }
     }
