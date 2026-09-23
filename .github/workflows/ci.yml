@@ -198,8 +198,9 @@ jobs:
           subject-path: tbg-lite-dev-x86_64-windows.zip
 
       # 滚动回收：gh release delete 连同 tag 一并清理（--cleanup-tag）；
-      # git push --delete 兜底"tag 残留而 release 已不在"的边角形态。
-      # 两条命令在首次发布（无旧资产）时必然失败，属预期路径，不阻断。
+      # git push --delete 兜底"tag 残留而 release 已不在"的边角形态
+      # （git 2.47 实测：删除不存在的远端 ref 为幂等成功 exit 0，不报错）。
+      # 首次发布无旧资产时 gh 报 not found 走回退提示，不阻断。
       - name: Recycle previous dev release + tag
         env:
           GH_TOKEN: ${{ github.token }}
