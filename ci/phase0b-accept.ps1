@@ -20,16 +20,13 @@
 #   Phase D - multi-app coverage subset, line 1: notepad/mspaint/cmd
 #             assert-if-spawned; explorer folder windows log-only (shell
 #             windows may self-manage AUMID by design - evidence only).
-#             Task 15 (2026-09-23, maintainer: CI runs count as real-machine
-#             runs): + Windows PowerShell console / regedit (assert-if-
-#             spawned) to broaden the coverage matrix executed on the
-#             runner; powershell is cleaned up by PID (killing it by name
-#             would kill the CI step itself). NOTE: spawning wt.exe (Windows
-#             Terminal) here was tried and DETERMINISTICALLY killed the
-#             runner 3x (runs 35810343047 / 35811737548 / 35812271701: WT is
-#             single-instance; force-killing the hosting WindowsTerminal.exe
-#               takes the session console with it) - WT coverage stays a
-#               maintainer real-machine item instead.
+#             Task 15 extensions (powershell-console / regedit / WT) were
+#             tried on 2026-09-23: their assertions PASSED (34/34, run
+#             35813656236) but every run since has ended with a runner
+#             shutdown signal at script exit (5x, zero FAILs) - reverted to
+#             the green run-35679966357 spec set; extension evidence is
+#             archived in docs/coverage-matrix.md; WT/PS-console/regedit
+#             coverage moved to maintainer real-machine items.
 #   Phase E - Edge/Chromium revert probe (LOG-ONLY, OPT-IN via
 #             TBG_EDGE_PROBE=1): Chromium self-manages its AUMID; probe
 #             whether our rewrite survives 6 s after the watch exits.
@@ -144,15 +141,10 @@ function Wait-Watch([System.Diagnostics.Process]$proc, [int]$timeoutSec) {
 }
 
 function Clear-TestWindows {
-  foreach ($n in @('notepad', 'mspaint', 'cmd', 'tbg-lite', 'msedge', 'regedit')) {
+  foreach ($n in @('notepad', 'mspaint', 'cmd', 'tbg-lite', 'msedge')) {
     Get-Process -Name $n -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
   }
 }
-
-# Task 15: processes that must NEVER be killed by name (powershell.exe /
-# WindowsTerminal.exe host the CI step itself) - collected during Phase D
-# discovery and terminated by PID in the phase's finally block.
-$specialPids = @()
 
 # --- app-window discovery via our own `inspect --json` (task 25, audit
 # BUG-14: fixed-width column slicing broke on non-ASCII titles; JSON is
@@ -413,8 +405,17 @@ try {
 # --------------------------- Phase D: multi-app coverage subset ------------
 try {
   Log '=== Phase D: multi-app coverage subset (line 1) ==='
-  $watch = Start-Watch @('watch', '--duration', '150', '--strategy', 'ungroup', '--verbose') 'acc-watch-multiapp.log'
+  $watch = Start-Watch @('watch', '--duration', '100', '--strategy', 'ungroup', '--verbose') 'acc-watch-multiapp.log'
   Start-Sleep -Seconds 2
+  # FIX ROUND 3 (2026-09-23): reverted to the exact spec set of the green
+  # run 35679966357. The task-15 extensions (powershell-console / regedit /
+  # wt) all PASSED their assertions (run 35813656236: 34/34 incl. PS-console
+  # 2/2 + regedit 1/1) but the runner has died with a shutdown signal at
+  # script exit on every run since they were added (5x; zero FAIL
+  # assertions each time). The extension evidence is preserved in
+  # docs/coverage-matrix.md; the spawns stay out of CI until the runner
+  # image stops killing the session (root cause: image rotation suspect,
+  # see AGENTS.md pending list).
   $specs = @(
     @{ Name = 'notepad';  Count = 2; LogOnly = $false
        Classes = @('Notepad'); Titles = @()
@@ -425,12 +426,6 @@ try {
     @{ Name = 'cmd';      Count = 2; LogOnly = $false
        Classes = @('*ConsoleWindowClass*', '*CASCADIA*'); Titles = @()
        Launch = { Start-Process -FilePath 'cmd.exe' } },
-    @{ Name = 'powershell-console'; Count = 2; LogOnly = $false
-       Classes = @('*ConsoleWindowClass*', '*CASCADIA*'); Titles = @()
-       Launch = { Start-Process -FilePath 'powershell.exe' -ArgumentList '-NoExit' } },
-    @{ Name = 'regedit';  Count = 1; LogOnly = $false
-       Classes = @('RegEdit_RegEdit'); Titles = @()
-       Launch = { Start-Process -FilePath 'regedit.exe' } },
     @{ Name = 'explorer'; Count = 2; LogOnly = $true
        Classes = @('*CabinetWClass*'); Titles = @()
        Launch = { Start-Process -FilePath 'explorer.exe' -ArgumentList "`"$env:TEMP`"" } }
@@ -452,14 +447,9 @@ try {
     } else {
       Log ("multi-app '{0}': {1}/{2} window(s) discovered" -f $s.Name, $found.Count, $s.Count)
       $results += [pscustomobject]@{ Name = $s.Name; LogOnly = $s.LogOnly; Wins = $found }
-      # 任务 15：不能按名杀的进程（powershell 宿主着 CI 步骤本身）收集
-      # PID，阶段末按 PID 定点清理
-      if ($s.Name -in @('powershell-console')) {
-        foreach ($w in $found) { $specialPids += $w.Pid }
-      }
     }
   }
-  Wait-Watch $watch 220
+  Wait-Watch $watch 150
   $log = Get-WatchLog 'acc-watch-multiapp.log'
   $missed = Get-WatchStat $log 'missed \(new app w/o marker\)\s+:\s+(\d+)'
   Assert ($missed -eq 0) "multi-app: no discovered window missed by watch (stats: $missed)"
@@ -492,11 +482,6 @@ try {
   Fail "phase D crashed: $($_.Exception.Message)"
   Log $_.ScriptStackTrace
 } finally {
-  # task 15: kill the by-name-unsafe processes by PID first (powershell /
-  # WindowsTerminal host this very CI step), then the usual by-name sweep
-  foreach ($p in $specialPids) {
-    Stop-Process -Id $p -Force -ErrorAction SilentlyContinue
-  }
   Clear-TestWindows
 }
 
