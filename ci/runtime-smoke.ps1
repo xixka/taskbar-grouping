@@ -661,7 +661,7 @@ try {
   $pinOut = & $exe pin --group tsmoke --target "$notepadExe" --to-taskbar | Out-String
   Assert (($LASTEXITCODE -eq 0) -and ($pinOut -cmatch 'aumid\s*:\s*TBG\.Group\.tsmoke') -and ($pinOut -cmatch 'verified')) 'pin taskbar: --to-taskbar exits 0 with the AUMID read back and verified'
   Assert (Test-Path $tilePath) "pin taskbar: tile exists in the pinned taskbar folder ($tilePath)"
-  Assert ($pinOut -cmatch 'pinned to the taskbar folder') 'pin taskbar: output explains when the tile becomes visible'
+  Assert ($pinOut -cmatch 'pin verb') 'pin taskbar: output reports whether the shell accepted the taskbar pin verb'
 
   # --- unpin removes it (and the folder keeps working afterwards) ---
   $unOut = & $exe unpin --group tsmoke | Out-String
@@ -722,6 +722,14 @@ try {
   $lnkAumid = ''
   if ($pinOut -match 'aumid\s*:\s*(TBG\.Group\.lnk18)') { $lnkAumid = $Matches[1] }
   Assert ($lnkAumid -eq 'TBG.Group.lnk18') 'link18: the tile .lnk carries the shared AUMID (read back by the tool)'
+  # Fix round 1 (run 35807254850): dropping the .lnk into the pinned folder
+  # alone does NOT register a taskbar button (the Taskband registry is the
+  # real source of pinned items). The tool now invokes the shell's taskbarpin
+  # verb on the .lnk - assert the shell accepted it; the visibility gate
+  # below (after the explorer restart) is unchanged.
+  Assert ($pinOut -cmatch 'pin verb\s*:\s*accepted by the shell') "link18: the shell accepted the taskbarpin verb (got: $(if ($pinOut -match 'pin verb\s*:\s*([^\r\n]+)') { $Matches[1] } else { '<no verb line>' }))"
+  # let the verb's Taskband registration settle before killing the shell
+  Start-Sleep -Seconds 2
 
   # --- 2. restart explorer so the pinned folder is re-read ---
   $newShellPid = Restart-ExplorerShell

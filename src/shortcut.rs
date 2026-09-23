@@ -37,6 +37,13 @@ use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 // 任务 17：固定目录写入后 nudging explorer 重读该目录（SHChangeNotify，
 // 公开 Shell API；best-effort，不设门禁——任务栏何时呈现固定项由 shell 决定）
 use windows::Win32::UI::Shell::{SHChangeNotify, SHCNF_PATHW, SHCNE_UPDATEDIR};
+// 任务 18 修复轮 1：taskbarpin/taskbarunpin verb——与用户右键“固定到任务栏”
+// 等价的 shell 动词（公开 ShellExecuteExW 入口；零注入：只对自己生成的 .lnk
+// 调用 shell 自己的动词处理器）。run 35807254850 实锤：仅写 .lnk 进固定
+// 文夹不会被 Taskband 注册表登记（重启 explorer 后无固定按钮），必须经
+// verb（或未文档化的 Taskband 二进制）才能注册固定项
+use windows::Win32::UI::Shell::{ShellExecuteExW, SHELLEXECUTEINFOW, SEE_MASK_FLAG_NO_UI};
+use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 /// 默认输出子目录名（数据目录下，`restoremap::data_dir()/pin`）。
 pub(crate) const PIN_DIR_NAME: &str = "pin";
@@ -76,6 +83,27 @@ pub(crate) fn notify_shell_dir_change(dir: &Path) {
             None,
         );
     }
+}
+
+/// 调用 shell 的 `taskbarpin` / `taskbarunpin` 动词（任务 18 修复轮 1）。
+/// 这是把固定项登记进 Taskband 的公开入口：`ShellExecuteExW` + 动词名
+/// （与用户右键“固定到任务栏”同路径；未文档化但自 Win7 起广泛使用的
+/// 约定动词）。零注入红线不破：只对调用方传入的 .lnk 调用 shell 自己的
+/// 处理器，不碰任何进程内部。返回 true = shell 接受动词；调用方据输出
+/// 行报告，真正的固定效果由 CI 重启 explorer 后的 UIA 断言把关。
+pub(crate) unsafe fn invoke_taskbar_verb(lnk: &Path, verb: &str) -> bool {
+    // 缓冲区须活到 ShellExecuteExW 返回（PCWSTR 只是裸指针）
+    let w_verb: Vec<u16> = verb.encode_utf16().chain(std::iter::once(0)).collect();
+    let w_file = wide_os(lnk.as_os_str());
+    let mut info = SHELLEXECUTEINFOW {
+        cbSize: std::mem::size_of::<SHELLEXECUTEINFOW>() as u32,
+        fMask: SEE_MASK_FLAG_NO_UI, // 动词被拒时不弹 UI（CI 无人工处置）
+        lpVerb: PCWSTR::from_raw(w_verb.as_ptr()),
+        lpFile: PCWSTR::from_raw(w_file.as_ptr()),
+        nShow: SW_SHOWNORMAL.0,
+        ..Default::default()
+    };
+    ShellExecuteExW(&mut info).is_ok()
 }
 
 /// `create_pin` 的结果（供 CLI 层输出与测试消费）。

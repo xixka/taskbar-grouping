@@ -23,7 +23,7 @@ Phase 0b（任务 5-10）已验收：runtime-smoke + phase0b-acceptance 断言�
 任务 13 起 runtime-smoke 扩至 20 项断言（含启动扫存量），任务 14 起扩至
 33 项（含交互菜单 Phase M），任务 19 起扩至 47 项（含自启 Phase I），
 任务 16 起扩至 59 项（含 pin Phase P），任务 17 起扩至 72 项（含
-固定/取消固定 Phase T），任务 18 起扩至 85 项（含磁贴联动 Phase L）。
+固定/取消固定 Phase T），任务 18 起扩至 86 项（含磁贴联动 Phase L）。
 
 **固定磁贴（任务 16/17/18，Phase 2）**：`pin` 命令为线路二分组生成带共享
 AUMID `TBG.Group.<NAME>` 的 `.lnk`（`src/shortcut.rs`，mklnkwaumid
@@ -37,7 +37,9 @@ AUMID `TBG.Group.<NAME>` 的 `.lnk`（`src/shortcut.rs`，mklnkwaumid
 2026-09-23 指令：CI 测试等同真机测试）：Phase L 在 CI 实测端到端联动
 ——重启 explorer 后 UIA 断言磁贴成为真实任务栏按钮、运行窗口 AUMID ==
 磁贴 AUMID（同组）、按钮与运行窗口合并（按钮名报 running-window
-计数）。
+计数）。run 35807254850 实锤"仅写固定文件夹不产生固定按钮"（Taskband
+注册表才是固定项真源）→ pin/unpin 经 shell `taskbarpin`/`taskbarunpin`
+动词（ShellExecuteExW 公开入口，零注入）登记/注销固定项。
 
 **交互菜单（任务 14，2026-09-22 维护者改版）**：无参数启动 `tbg-lite` 进入
 交互菜单（`src/menu.rs`）——`[1]`/`[2]` 启动线路一/线路二 watch（后台线程 +
@@ -72,7 +74,7 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   （Phase T：--to-taskbar 写入用户固定目录、unpin 删除/幂等、同名外来
   .lnk 拒删安全阀）与任务 18 磁贴联动（Phase L：重启 explorer 后 UIA
   断言磁贴为真实任务栏按钮、运行窗口 AUMID == 磁贴 AUMID 同组、按钮
-  与运行窗口合并）；85 项断言；仅由 CI 执行，
+  与运行窗口合并）；86 项断言；仅由 CI 执行，
   本地未验证。
 - `ci/phase0b-accept.ps1` —— CI Phase 0b 验收套件（任务 10，
   `phase0b-acceptance` job）：双线路各 50 窗口压测 + 常驻内存 <10MB 判定
@@ -127,7 +129,8 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   + 17 + 18；
   双线路 AUMID 断言 + 启动扫存量断言 + 交互菜单 Phase M + 截图/explorer 探针
   + 自启 Phase I + pin Phase P + 固定/取消固定 Phase T + 磁贴联动 Phase L
-  （含 UIA 任务栏按钮枚举与 explorer 重启辅助），输出在 ci/out 工件）
+  （含 UIA 任务栏按钮枚举与 explorer 重启辅助、taskbarpin/taskbarunpin
+  动词调用），输出在 ci/out 工件）
 - `ci/phase0b-accept.ps1` —— CI Phase 0b 验收套件（任务 10；50 窗口压测/
   内存/多应用覆盖/Edge 回写探针/UIA 任务栏按钮，输出在 ci/out 工件）
 - `Cargo.toml` —— windows 0.58 依赖 feature 组；体积导向 release profile

@@ -1026,12 +1026,21 @@ fn cmd_pin(args: &[String]) -> Result<(), String> {
         println!("args      : {a}");
     }
     if to_taskbar {
-        // 任务 17：已写入用户固定目录；通知 shell 重读（best-effort）。
-        // 任务栏在 explorer 重启/登录时读取该目录呈现固定项
+        // 任务 17/18：写入用户固定目录 + taskbarpin 动词登记 Taskband（
+        // run 35807254850 实锤：仅写文件夹不会产生固定按钮）；再通知 shell
+        // 重读目录。动词是否被接受由输出行报告，固定效果由 CI 重启
+        // explorer 后的 UIA 断言把关
+        let verb_ok = unsafe { shortcut::invoke_taskbar_verb(&out_path, "taskbarpin") };
         shortcut::notify_shell_dir_change(&out_dir);
-        println!(
-            "note      : pinned to the taskbar folder; the tile appears when explorer restarts or at the next logon (task 17)"
-        );
+        if verb_ok {
+            println!(
+                "pin verb  : accepted by the shell (taskbarpin) - the tile is registered as a pinned taskbar item (task 18)"
+            );
+        } else {
+            println!(
+                "pin verb  : declined by the shell; the tile sits in the pinned folder and appears at the next logon"
+            );
+        }
     } else {
         println!(
             "note      : drag the .lnk onto the taskbar to pin it visually, or re-run with --to-taskbar (task 17)"
@@ -1070,6 +1079,9 @@ fn cmd_unpin(args: &[String]) -> Result<(), String> {
             path.display()
         ));
     }
+    // 先请 shell 从 Taskband 注销固定项（taskbarunpin 动词，best-effort；
+    // run 35807254850 实锤：Taskband 才是固定按钮的真源），再删文件
+    let _ = unsafe { shortcut::invoke_taskbar_verb(&path, "taskbarunpin") };
     std::fs::remove_file(&path)
         .map_err(|e| format!("unpin: cannot remove '{}' : {e}", path.display()))?;
     shortcut::notify_shell_dir_change(&dir);
