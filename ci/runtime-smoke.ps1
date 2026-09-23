@@ -33,6 +33,16 @@
 #             custom --out directory with --icon, re-running replaces the
 #             tile, and usage errors (no args / bad group / missing target
 #             / nonexistent target / bad icon spec) exit 2.
+#   Phase T - task 17 pin --to-taskbar / unpin: the tile is written into
+#             the per-user taskbar pinned folder, verified on disk, removed
+#             again by unpin (idempotent), and a foreign same-name .lnk
+#             must be refused (safety valve).
+#   Phase L - task 18 line-2 x pinned tile linkage: explorer is restarted
+#             so the pinned folder is re-read; the tile must appear as a
+#             real taskbar button (UIA), the live notepad windows must
+#             carry the tile's exact AUMID (same group), and the button
+#             must merge with the running windows (UIA name reports the
+#             running-window count). Restore + unpin return to clean state.
 #   Phase C - explorer/taskbar feasibility probe (best effort, no
 #             assertions): screenshots only, to see whether a real taskbar
 #             can be hosted in this session.
@@ -180,6 +190,51 @@ function Wait-Watch([System.Diagnostics.Process]$proc, [int]$timeoutSec) {
   if ($null -eq $code -or $code -ne 0) {
     throw "watch exited with code $code"
   }
+}
+
+# --- task 18 helpers: UIA taskbar button names + explorer shell restart -----
+# Same UIA approach as ci/phase0b-accept.ps1 (child powershell.exe isolates
+# the UIAutomation apartment from the main script).
+
+function Get-TaskbarButtonNames {
+  $uia = @'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$root = [System.Windows.Automation.AutomationElement]::RootElement
+$cond = New-Object System.Windows.Automation.PropertyCondition([System.Windows.Automation.AutomationElement]::ControlTypeProperty, [System.Windows.Automation.ControlType]::Button)
+$btns = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $cond)
+foreach ($b in $btns) { $n = $b.Current.Name; if ($n) { Write-Output $n } }
+'@
+  try {
+    return @(& powershell.exe -NoProfile -Command $uia)
+  } catch {
+    Log "UIA button enumeration failed: $($_.Exception.Message)"
+    return @()
+  }
+}
+
+function Restart-ExplorerShell {
+  # Kill explorer so the shell re-reads the taskbar pinned folder (task 18)
+  # and the taskbar is rebuilt from scratch (task 20 relies on the same
+  # mechanic). AutoRestartShell=1 (default) relaunches the shell on its own;
+  # poll for a NEW pid, manual `explorer.exe` as the fallback.
+  $before = (Get-Process -Name explorer -ErrorAction SilentlyContinue | Select-Object -First 1).Id
+  Stop-Process -Name explorer -Force -ErrorAction SilentlyContinue
+  $deadline = (Get-Date).AddSeconds(30)
+  while ((Get-Date) -lt $deadline) {
+    Start-Sleep -Seconds 2
+    $procs = @(Get-Process -Name explorer -ErrorAction SilentlyContinue)
+    if ($procs.Count -gt 0) {
+      $newId = ($procs | Select-Object -First 1).Id
+      if ($newId -ne $before) { return $newId }
+    }
+  }
+  Log 'Restart-ExplorerShell: auto-restart did not happen; launching explorer.exe manually'
+  Start-Process -FilePath 'explorer.exe'
+  Start-Sleep -Seconds 5
+  $procs = @(Get-Process -Name explorer -ErrorAction SilentlyContinue)
+  if ($procs.Count -gt 0) { return ($procs | Select-Object -First 1).Id }
+  return 0
 }
 
 # ---------------------------------------------------------------- env report
@@ -639,6 +694,103 @@ try {
   # hygiene: never leave test tiles behind on the runner (not an assertion)
   Remove-Item (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\tsmoke.lnk')  -ErrorAction SilentlyContinue
   Remove-Item (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\tsmoke2.lnk') -ErrorAction SilentlyContinue
+}
+
+# ------------------- phase L: line-2 x pinned tile linkage (task 18) -------
+# The end-to-end tile story on a REAL taskbar: pin the tile into the user
+# pinned folder (task 17), restart explorer so the folder is re-read and the
+# tile becomes a taskbar button (UIA evidence), then run a line-2 group watch
+# whose shared AUMID equals the tile's AUMID. Assertions:
+#   - the pinned tile is visible as a taskbar button after the restart (UIA)
+#   - every live notepad window's AUMID == the .lnk's AUMID (same group)
+#   - the taskbar button MERGES with the running windows (UIA: the button
+#     name reports the running-window count)
+#   - restore + unpin return the session to a clean state
+try {
+  Log '=== Phase L: line-2 x pinned tile linkage (task 18) ==='
+  $notepadExe = Join-Path $env:WINDIR 'System32\notepad.exe'
+  $pinnedDir  = Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'
+  $tilePath   = Join-Path $pinnedDir 'lnk18.lnk'
+  $mapPath    = Join-Path $env:LOCALAPPDATA 'tbg-lite\tbg-restore.tsv'
+  # defensive pre-clean (not an assertion): never inherit a stale tile/map
+  Remove-Item $tilePath -ErrorAction SilentlyContinue
+  if (Test-Path $mapPath) { Remove-Item $mapPath -Force }
+
+  # --- 1. pin the tile into the taskbar pinned folder ---
+  $pinOut = & $exe pin --group lnk18 --target "$notepadExe" --to-taskbar | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($pinOut -cmatch 'verified')) 'link18: pin --to-taskbar exits 0 with the AUMID verified'
+  $lnkAumid = ''
+  if ($pinOut -match 'aumid\s*:\s*(TBG\.Group\.lnk18)') { $lnkAumid = $Matches[1] }
+  Assert ($lnkAumid -eq 'TBG.Group.lnk18') 'link18: the tile .lnk carries the shared AUMID (read back by the tool)'
+
+  # --- 2. restart explorer so the pinned folder is re-read ---
+  $newShellPid = Restart-ExplorerShell
+  Assert ($newShellPid -gt 0) "link18: explorer restarted (new shell pid $newShellPid), taskbar rebuilt"
+
+  # --- 3. UIA: the pinned tile is a taskbar button now ---
+  $tileVisible = $false
+  $btnPinned = @()
+  $deadline = (Get-Date).AddSeconds(30)
+  while ((Get-Date) -lt $deadline) {
+    $btnPinned = Get-TaskbarButtonNames
+    if (@($btnPinned | Where-Object { $_ -match 'lnk18' }).Count -gt 0) { $tileVisible = $true; break }
+    Start-Sleep -Seconds 3
+  }
+  ($btnPinned -join "`r`n") | Set-Content (Join-Path $out 'taskbar-buttons-link18-pinned.txt') -Encoding UTF8
+  Assert $tileVisible 'link18: pinned tile visible as a taskbar button after the explorer restart (UIA)'
+
+  # --- 4. line-2 group watch: live windows share the tile's AUMID ---
+  $lNotepads = Spawn-Notepads 2
+  $lOrig = @()
+  foreach ($w in $lNotepads) { $lOrig += (Get-WindowAumid $w.Hwnd) }
+  $watch = Start-Watch @('watch','--duration','30','--strategy','group','--group','lnk18','--verbose') 'watch-link18.log'
+  Wait-Watch $watch 90
+  $watchLog = Get-Content (Join-Path $out 'watch-link18.log') -Raw
+  & $exe inspect --all | Set-Content (Join-Path $out 'inspect-link18.log') -Encoding UTF8
+  $lAumids = @()
+  foreach ($w in $lNotepads) { $lAumids += (Get-WindowAumid $w.Hwnd) }
+  Assert (@($lAumids | Where-Object { $_ -eq 'TBG.Group.lnk18' }).Count -eq 2) 'link18: both notepad windows carry the shared group AUMID'
+  Assert (@($lAumids | Where-Object { $_ -eq $lnkAumid }).Count -eq 2) 'link18: live window AUMIDs == the tile .lnk AUMID (same group, task 18 CI assertion)'
+
+  # --- 5. UIA: the tile button MERGED with the running windows ---
+  $merged = @()
+  $deadline = (Get-Date).AddSeconds(30)
+  while ((Get-Date) -lt $deadline) {
+    $btnMerged = Get-TaskbarButtonNames
+    $merged = @($btnMerged | Where-Object { $_ -match 'lnk18' })
+    if (@($merged | Where-Object { $_ -match 'running window' }).Count -gt 0) { break }
+    Start-Sleep -Seconds 3
+  }
+  ($btnMerged -join "`r`n") | Set-Content (Join-Path $out 'taskbar-buttons-link18-merged.txt') -Encoding UTF8
+  Assert ($merged.Count -gt 0) 'link18: the taskbar button for the group is present (UIA)'
+  Assert (@($merged | Where-Object { $_ -match 'running window' }).Count -gt 0) "link18: the button merged with the running windows - name reports the count (got: '$($merged | Select-Object -First 1)')"
+  Shot 'desktop-link18-merged.png'
+
+  # --- 6. restore + unpin: back to a clean state ---
+  $restoreOut = & $exe restore | Out-String
+  $restoreOut | Set-Content (Join-Path $out 'restore-link18.log') -Encoding UTF8
+  Assert ($LASTEXITCODE -eq 0) 'link18: restore exited 0'
+  $lAfter = @()
+  foreach ($w in $lNotepads) { $lAfter += (Get-WindowAumid $w.Hwnd) }
+  $okCount = 0
+  for ($i = 0; $i -lt $lNotepads.Count; $i++) {
+    if ($lAfter[$i] -eq $lOrig[$i]) { $okCount++ }
+  }
+  Assert ($okCount -eq 2) "link18: restore returned both notepads to their original AUMIDs ($okCount/2)"
+  Assert (-not (Test-Path $mapPath)) 'link18: restore map removed after full restore'
+  $unOut = & $exe unpin --group lnk18 | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($unOut -cmatch 'removed tile')) 'link18: unpin removed the tile from the pinned folder'
+  Assert (-not (Test-Path $tilePath)) 'link18: tile gone from the pinned taskbar folder'
+} catch {
+  Fail "phase L crashed: $($_.Exception.Message)"
+  Log $_.ScriptStackTrace
+} finally {
+  # hygiene: tiles restored, test windows closed, explorer left running
+  Remove-Item (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\lnk18.lnk') -ErrorAction SilentlyContinue
+  if (-not (Get-Process -Name explorer -ErrorAction SilentlyContinue)) {
+    Start-Process -FilePath 'explorer.exe'
+  }
+  Clear-TestWindows
 }
 
 # --------------------------- phase C: explorer/taskbar feasibility probe

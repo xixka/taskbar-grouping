@@ -23,18 +23,21 @@ Phase 0b（任务 5-10）已验收：runtime-smoke + phase0b-acceptance 断言�
 任务 13 起 runtime-smoke 扩至 20 项断言（含启动扫存量），任务 14 起扩至
 33 项（含交互菜单 Phase M），任务 19 起扩至 47 项（含自启 Phase I），
 任务 16 起扩至 59 项（含 pin Phase P），任务 17 起扩至 72 项（含
-固定/取消固定 Phase T）。
+固定/取消固定 Phase T），任务 18 起扩至 85 项（含磁贴联动 Phase L）。
 
-**固定磁贴（任务 16/17，Phase 2）**：`pin` 命令为线路二分组生成带共享
+**固定磁贴（任务 16/17/18，Phase 2）**：`pin` 命令为线路二分组生成带共享
 AUMID `TBG.Group.<NAME>` 的 `.lnk`（`src/shortcut.rs`，mklnkwaumid
 直译）：磁贴与被 watch 改写的运行中窗口共享同一 AUMID，任务栏据此
-归组（视觉合并验收属任务 18）。落盘后独立 Load 回读自校验，不成功
-不报告成功；不触碰还原表故不参与单实例互斥。任务 17：`pin
---to-taskbar` 把磁贴直接写入用户固定目录 `%APPDATA%\...\User
-Pinned\TaskBar`（与 `--out` 互斥），`unpin --group` 反向删除——删前
-回读 AUMID 验证确为本工具所写（同名外来快捷方式拒删退出 1）；两向
-辅以 `SHChangeNotify` 通知 shell（best-effort；固定项在 explorer
-重启/登录时呈现）。
+归组。落盘后独立 Load 回读自校验，不成功不报告成功；不触碰还原表故不
+参与单实例互斥。任务 17：`pin --to-taskbar` 把磁贴直接写入用户固定
+目录 `%APPDATA%\...\User Pinned\TaskBar`（与 `--out` 互斥），
+`unpin --group` 反向删除——删前回读 AUMID 验证确为本工具所写（同名
+外来快捷方式拒删退出 1）；两向辅以 `SHChangeNotify` 通知 shell
+（best-effort；固定项在 explorer 重启/登录时呈现）。任务 18（维护者
+2026-09-23 指令：CI 测试等同真机测试）：Phase L 在 CI 实测端到端联动
+——重启 explorer 后 UIA 断言磁贴成为真实任务栏按钮、运行窗口 AUMID ==
+磁贴 AUMID（同组）、按钮与运行窗口合并（按钮名报 running-window
+计数）。
 
 **交互菜单（任务 14，2026-09-22 维护者改版）**：无参数启动 `tbg-lite` 进入
 交互菜单（`src/menu.rs`）——`[1]`/`[2]` 启动线路一/线路二 watch（后台线程 +
@@ -57,8 +60,8 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 - `cargo build --release` —— 唯一经验证的构建命令；提取自
   `.github/workflows/ci.yml`，已由 CI 实际运行通过（windows-latest）。本仓库验收
   门禁 = 该命令在 CI 绿灯。
-- `ci/runtime-smoke.ps1` —— CI 运行时冒烟（任务 9 + 13 + 14 + 19 + 16
-  + 17，
+- `ci/runtime-smoke.ps1` —— CI 运行时冒烟（任务 9 + 13 + 14 + 19 + 16 + 17
+  + 18，
   `runtime-smoke` job）：在 windows-latest 真实会话拉起 notepad 窗口，断言
   双线路 AUMID 改写/复原、任务 13 启动扫存量（Phase 0 线路一 / Phase B
   线路二预开窗口断言）、任务 14 交互菜单（Phase M 双会话：stdin 预写驱动，
@@ -67,7 +70,9 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   用法错误退出码 2）、任务 16 pin（Phase P：.lnk 磁贴落盘与回读验证、
   默认/自定义目录、覆盖重跑、用法错误×5）与任务 17 固定/取消固定
   （Phase T：--to-taskbar 写入用户固定目录、unpin 删除/幂等、同名外来
-  .lnk 拒删安全阀）；72 项断言；仅由 CI 执行，
+  .lnk 拒删安全阀）与任务 18 磁贴联动（Phase L：重启 explorer 后 UIA
+  断言磁贴为真实任务栏按钮、运行窗口 AUMID == 磁贴 AUMID 同组、按钮
+  与运行窗口合并）；85 项断言；仅由 CI 执行，
   本地未验证。
 - `ci/phase0b-accept.ps1` —— CI Phase 0b 验收套件（任务 10，
   `phase0b-acceptance` job）：双线路各 50 窗口压测 + 常驻内存 <10MB 判定
@@ -119,9 +124,10 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   不触碰还原表故不参与单实例互斥
 - `src/winutil.rs` —— 窗口/COM/字符串工具（枚举、应用窗口判定、cloak 检测）
 - `ci/runtime-smoke.ps1` —— CI 运行时冒烟脚本（任务 9 + 13 + 14 + 19 + 16
-  + 17；
+  + 17 + 18；
   双线路 AUMID 断言 + 启动扫存量断言 + 交互菜单 Phase M + 截图/explorer 探针
-  + 自启 Phase I + pin Phase P + 固定/取消固定 Phase T，输出在 ci/out 工件）
+  + 自启 Phase I + pin Phase P + 固定/取消固定 Phase T + 磁贴联动 Phase L
+  （含 UIA 任务栏按钮枚举与 explorer 重启辅助），输出在 ci/out 工件）
 - `ci/phase0b-accept.ps1` —— CI Phase 0b 验收套件（任务 10；50 窗口压测/
   内存/多应用覆盖/Edge 回写探针/UIA 任务栏按钮，输出在 ci/out 工件）
 - `Cargo.toml` —— windows 0.58 依赖 feature 组；体积导向 release profile

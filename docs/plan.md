@@ -34,7 +34,7 @@
   Ctrl+C）、开机自启三命令（任务 19：HKCU Run，无需管理员；`status` 速览
   自启/标记窗口/映射表）、审计修复（原子写/单实例/标记严格校验/钉 SHA 等）；
   CI 四 job
-  （`build` 编译+单测门禁 / `lockfile` 新鲜度 / `runtime-smoke` 72 断言 /
+  （`build` 编译+单测门禁 / `lockfile` 新鲜度 / `runtime-smoke` 85 断言 /
   `phase0b-acceptance` 30 断言）。
 - 验收关键数据（详见验收报告）：双线路 50 窗口压测 0 漏检 0 回写 0 写失败；UIA 证实
   线路一每窗口独立按钮、线路二 50 窗合并单组、还原回原生；工作集 9.15 MB；explorer
@@ -106,8 +106,16 @@
       错误×2、固定目录落盘+回读验证×3、unpin 删除×2、幂等、外来同名
       拒删×4 含 WScript.Shell 构造探针），断言 59→72；新增 1 项单元测试
       （固定目录路径拼接），单测 38→39。
-- [ ] **任务 18**：线路二 × 固定磁贴联动验收——CI 断言 `.lnk` 的 AUMID 与运行中窗口
+- [x] **任务 18**：线路二 × 固定磁贴联动验收——CI 断言 `.lnk` 的 AUMID 与运行中窗口
       共享 AUMID 一致（同组判定）；真机视觉清单（磁贴与运行窗口合并显示）。
+      完成：runtime-smoke 新增 Phase L（13 断言，维护者 2026-09-23 指令
+      「GitHub CI 测试等同真机测试」，Win11 24H2 内核 Runner 实测）：
+      `pin --to-taskbar` 落盘固定目录 → 重启 explorer（AutoRestartShell
+      自动拉起，30s 轮询 + 手动 fallback）→ UIA 断言磁贴成为真实任务栏
+      按钮 → 线路二 watch 后逐窗断言 AUMID == `.lnk` 回读 AUMID（同组
+      判定）→ UIA 断言按钮与运行窗口合并（按钮名报 running-window 计数）
+      → restore 复原 + 映射表清理 + unpin 删磁贴全链路绿灯。断言
+      72→85。
 
 ### Phase 3 — 常驻、自启与分发
 
@@ -177,8 +185,8 @@ DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任
 | 层面 | 方法 |
 |---|---|
 | 编译门禁 | CI `build`（windows-latest，`cargo build --release --locked` + `cargo test --locked`，任务 22b/23） |
-| 双线路行为回归 | CI `runtime-smoke`（72 断言，含启动扫存量、交互菜单、自启 Phase I、pin Phase P 与固定/取消固定 Phase T）+ `phase0b-acceptance`（30 断言），每次 push |
-| 固定磁贴联动 | CI 断言（任务 18） |
+| 双线路行为回归 | CI `runtime-smoke`（85 断言，含启动扫存量、交互菜单、自启 Phase I、pin Phase P、固定/取消固定 Phase T 与磁贴联动 Phase L）+ `phase0b-acceptance`（30 断言），每次 push |
+| 固定磁贴联动 | CI 断言（任务 18，Phase L：.lnk AUMID == 运行窗口 AUMID + UIA 合并按钮，已绿） |
 | 真机清单 | 竞态感知率、覆盖矩阵全量、长时回写、视觉细节、explorer 重启（验收报告 §5） |
 | 内存/体积 | 验收报告口径；发布前回填 `BENCHMARK.md`（任务 21） |
 
