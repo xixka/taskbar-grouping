@@ -151,7 +151,11 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   + `lockfile`（任务 22：Cargo.lock 生成/新鲜度门禁）+ `runtime-smoke`
   （任务 9：运行时冒烟）+ `phase0b-acceptance`（任务 10：Phase 0b 验收）
   四个 job + `release`（任务 21：tag v* 触发，needs 四 job，打包 zip +
-  SHA256SUMS + attest-build-provenance + GitHub Release）
+  SHA256SUMS + attest-build-provenance + GitHub Release）+ `dev-release`
+  （任务 27：分支推送触发，needs 四 job，滚动 prerelease `dev`——
+  action-gh-release v3.0.3 不移动已存在 tag，发布前 gh release delete
+  --cleanup-tag 双回收保证 tag 滚动指向当次 commit；job 级 concurrency
+  防连续推送竞态；产物与正式通道同构含 attestation）
 - `docs/plan.md` —— 实施计划 v2（§0 决策 / §3 任务清单，已全部完成；提交一一对应任务号）
 - `docs/coverage-matrix.md` —— 多应用覆盖矩阵记录表（任务 15 已回填关闭：
   维护者 2026-09-23 指令"CI 测试等同真机测试"，CI 行即真机行；§8 裁决
@@ -206,4 +210,6 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 - 已定（任务 21，2026-09-23）：LICENSE = MIT（Cargo.toml + LICENSE 文件）；
   发布流程 = CI `release` job（tag v* 触发，zip + SHA256SUMS +
   build-provenance attestation + gh release create，actions 钉 SHA）；
-  配置文件维持不需要（plan v2 §6-2 决议）
+  配置文件维持不需要（plan v2 §6-2 决议）；dev 滚动预发布通道 =
+  `dev-release` job（任务 27，2026-09-23，分支推送 + 四 job 全绿后覆盖
+  发布 prerelease `dev`，tag 滚动指向当次 commit）

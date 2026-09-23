@@ -200,6 +200,17 @@
       checkout v4.4.0 / upload-artifact v4.6.2 / rust-toolchain stable）；
       发布物签名/SHA256 流程注记进任务 21（SEC-04）；AGENTS.md 全面同步
       （单实例红线、映射表新路径、测试门禁、审计修复落档）。
+- [x] **任务 27**（维护者 2026-09-23 指令：dev 滚动发布通道）：分支推送
+      → 四 job 门禁全绿 → 覆盖式发布 prerelease `dev`。发布步骤为维护者
+      给定（softprops/action-gh-release v3.0.3 钉 SHA，tag_name=dev、
+      prerelease=true、body 记 Branch/Commit/Built at）原样落地。工程
+      决策：① action 不移动已存在 tag（target_commitish 仅建新 tag 时
+      生效）→ 发布前 `gh release delete dev --cleanup-tag` + git push
+      --delete 双回收，保证 dev tag 滚动指向当次 commit；② job 级
+      concurrency（cancel-in-progress）防连续推送竞态；③ 产物与正式通道
+      同构（zip + SHA256SUMS + build-provenance attestation，SEC-04
+      同口径）；④ prerelease 不占 latest 位，v* 稳定版仍为最新；
+      ⑤ `fail_on_unmatched_files` 门禁防空资产发布。
 
 ### Phase R 验收结论（2026-09-22）
 

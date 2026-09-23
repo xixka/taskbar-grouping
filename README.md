@@ -16,6 +16,15 @@ Two strategy lines (`watch --strategy`):
   grouping; originals are persisted to `%LOCALAPPDATA%\tbg-lite\tbg-restore.tsv`
   (atomic writes, single-instance mutex) for `restore`.
 
+## Installation
+
+- **Stable**: [latest release](https://github.com/xixka/taskbar-grouping/releases/latest)
+  (`v*` tags; zip + `SHA256SUMS.txt` + build-provenance attestation).
+- **Dev channel**: the rolling [`dev` prerelease](https://github.com/xixka/taskbar-grouping/releases/tag/dev) —
+  rebuilt from the latest push that passed the full CI suite (see
+  "Evidence & verification" below); same artifact format, prerelease
+  quality bar, tag always points at the exact commit it was built from.
+
 ## CLI
 
 ```
