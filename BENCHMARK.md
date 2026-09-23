@@ -11,11 +11,12 @@
 
 | 项 | 实测 | plan v1 §6 预算 | 判定 |
 |---|---|---|---|
-| 单文件 exe `tbg-lite.exe` | 见 [Releases](https://github.com/xixka/taskbar-grouping/releases) 附件（release 工作流自动附 SHA256 与字节数） | B+ 路线 <0.5 MB 目标 | 见 Release 页实测值 |
+| 单文件发布 zip（exe） | **153,637 字节（150 KB）**（v0.1.0，SHA256 3E700805…D3F94E，[Releases](https://github.com/xixka/taskbar-grouping/releases)） | B+ 路线 <0.5 MB 目标 | **达标**（约为预算 1/3.4） |
 
 > release 工作流（`.github/workflows/ci.yml` 的 `release` job，tag `v*` 触发）
 > 在发布说明中自动写入当次构建的 `size_bytes` 与 `sha256`，并附
-> build-provenance attestation（审计 SEC-04）。
+> build-provenance attestation（审计 SEC-04）。v0.1.0 实测：zip 153,637
+> 字节；attest 步骤绿灯（release run 35815197242，5/5 job 成功）。
 
 ## 2. 常驻内存（watch 运行中）
 
