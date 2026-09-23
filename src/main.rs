@@ -13,7 +13,9 @@
 //! `status`——HKCU Run 开机自启（无需管理员）与状态速览（自启命令、
 //! 标记窗口计数、映射表状态）；任务 16（Phase 2）：`pin`——为线路二
 //! 分组生成带 `TBG.Group.<NAME>` AUMID 的 `.lnk` 固定磁贴
-//! （docs/plan.md v2 §3）。
+//! （docs/plan.md v2 §3）；任务 17（Phase 2）：`pin --to-taskbar` 把磁贴
+//! 写入任务栏用户固定目录 + `unpin --group` 反向删除（回读 AUMID 确认
+//! 后才删，防误删用户同名快捷方式）。
 
 mod appid;
 mod autostart;
@@ -44,7 +46,8 @@ USAGE:
     tbg-lite uninstall
     tbg-lite status
     tbg-lite pin --group <NAME> --target <PATH> [--icon <PATH[,INDEX]>]
-                 [--args <STR>] [--out <DIR>]
+                 [--args <STR>] [--out <DIR> | --to-taskbar]
+    tbg-lite unpin --group <NAME>
 
 COMMANDS:
     (menu)    launched with NO arguments (task 14): interactive menu —
@@ -120,12 +123,24 @@ COMMANDS:
               --out <DIR>           output directory (default
                                     %LOCALAPPDATA%\\tbg-lite\\pin); file
                                     name is always <NAME>.lnk and re-running
-                                    replaces it (task 17 will pin it to the
-                                    taskbar automatically)
+                                    replaces it
+              --to-taskbar          write the tile straight into the
+                                    per-user taskbar pinned folder
+                                    (%APPDATA%\\...\\User Pinned\\TaskBar)
+                                    instead of --out (task 17); the tile
+                                    appears when explorer restarts or at the
+                                    next logon; cannot be combined with --out
+    unpin     remove a group tile from the taskbar pinned folder (task 17,
+              the reverse of `pin --to-taskbar`): deletes <NAME>.lnk after
+              reading its AUMID back and verifying it is the shared
+              TBG.Group.<NAME> written by this tool (a foreign shortcut
+              with the same file name is refused, never deleted); idempotent
+              - reports 'not pinned' and exits 0 when nothing to remove
+              --group <NAME>        group name of the tile to remove
 
 STATUS:
-    tasks 5-14, 16 + 19 done; task 15 template shipped (real-machine matrix
-    pending maintainer fill) — see docs/plan.md v2 §3
+    tasks 5-14, 16-17, 19 done; task 15 template shipped (real-machine matrix
+    pending maintainer fill) - see docs/plan.md v2 §3
 ";
 
 fn main() -> ExitCode {
@@ -163,6 +178,7 @@ fn main() -> ExitCode {
         Some("uninstall") => report(cmd_uninstall(&args[1..])),
         Some("status") => report(cmd_status(&args[1..])),
         Some("pin") => report(cmd_pin(&args[1..])),
+        Some("unpin") => report(cmd_unpin(&args[1..])),
         Some(other) => {
             eprintln!("tbg-lite: unknown command '{other}' (see --help)");
             ExitCode::from(2)
@@ -889,16 +905,20 @@ fn cmd_status(args: &[String]) -> Result<(), String> {
 }
 
 /// 任务 16（Phase 2）：生成带共享 AUMID `TBG.Group.<NAME>` 的 `.lnk` 固定
-/// 磁贴。参数校验（usage → 退出码 2）：组名走 `group_aumid`、`--target`
-/// 必须是已存在文件、`--icon` 规格可解析且文件存在、`--args` 无控制字符；
-/// 运行时错误（COM/IO，退出码 1）由 `shortcut::create_pin` 以 `pin: ` 前缀
-/// 上抛。成功输出磁贴路径、回读验证过的 AUMID 与目标/图标来源。
+/// 磁贴。任务 17：`--to-taskbar` 把磁贴直接写入任务栏用户固定目录
+/// （`%APPDATA%\\...\\User Pinned\\TaskBar`），代替 --out（两者互斥）。
+/// 参数校验（usage → 退出码 2）：组名走 `group_aumid`、`--target`
+/// 必须是已存在文件、`--icon` 规格可解析且文件存在、`--args` 无控制字符、
+/// `--to-taskbar` 不与 `--out` 同用；运行时错误（COM/IO，退出码 1）由
+/// `shortcut::create_pin` 以 `pin: ` 前缀上抛。成功输出磁贴路径、
+/// 回读验证过的 AUMID 与目标/图标来源。
 fn cmd_pin(args: &[String]) -> Result<(), String> {
     let mut group: Option<String> = None;
     let mut target: Option<String> = None;
     let mut icon: Option<String> = None;
     let mut cmd_args: Option<String> = None;
     let mut out: Option<String> = None;
+    let mut to_taskbar = false;
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
@@ -907,11 +927,16 @@ fn cmd_pin(args: &[String]) -> Result<(), String> {
             "--icon" => icon = Some(next_arg(&mut it, "--icon")?.clone()),
             "--args" => cmd_args = Some(next_arg(&mut it, "--args")?.clone()),
             "--out" => out = Some(next_arg(&mut it, "--out")?.clone()),
+            "--to-taskbar" => to_taskbar = true,
             other => return Err(format!("usage: pin: unknown argument '{other}'")),
         }
     }
     let group_name = group.ok_or("usage: pin: --group <NAME> is required")?;
     let target_raw = target.ok_or("usage: pin: --target <PATH> is required")?;
+    // 任务 17：--to-taskbar 与 --out 互斥（输出位置只能二选一）
+    if to_taskbar && out.is_some() {
+        return Err("usage: pin: --to-taskbar and --out are mutually exclusive".into());
+    }
     // 组名与 watch/install 同一校验器（字符集 [A-Za-z0-9._-]，1..=32）
     let aumid = appid::group_aumid(&group_name).map_err(|e| format!("usage: pin: {e}"))?;
     // 图标规格（宽容式逗号切分，见 shortcut::parse_icon_spec）
@@ -955,10 +980,15 @@ fn cmd_pin(args: &[String]) -> Result<(), String> {
         Some((icon_file, idx)) => Some((canonical(std::path::Path::new(icon_file), "--icon")?, *idx)),
         None => None,
     };
-    // 输出目录：--out 或数据目录下的 pin 子目录；文件名恒 <组名>.lnk
-    let out_dir = match &out {
-        Some(d) => std::path::PathBuf::from(d),
-        None => shortcut::pin_dir(&restoremap::data_dir().map_err(|e| format!("pin: {e}"))?),
+    // 输出目录：--to-taskbar → 任务栏用户固定目录（任务 17）；--out →
+    // 自定义；缺省 → 数据目录下的 pin 子目录；文件名恒 <组名>.lnk
+    let out_dir = if to_taskbar {
+        shortcut::pinned_taskbar_dir().map_err(|e| format!("pin: {e}"))?
+    } else {
+        match &out {
+            Some(d) => std::path::PathBuf::from(d),
+            None => shortcut::pin_dir(&restoremap::data_dir().map_err(|e| format!("pin: {e}"))?),
+        }
     };
     let out_path = out_dir.join(shortcut::lnk_file_name(&group_name));
     std::fs::create_dir_all(&out_dir).map_err(|e| {
@@ -995,8 +1025,55 @@ fn cmd_pin(args: &[String]) -> Result<(), String> {
     if let Some(a) = &cmd_args {
         println!("args      : {a}");
     }
-    println!(
-        "note      : drag the .lnk onto the taskbar to pin it visually; automated pinning is task 17"
-    );
+    if to_taskbar {
+        // 任务 17：已写入用户固定目录；通知 shell 重读（best-effort）。
+        // 任务栏在 explorer 重启/登录时读取该目录呈现固定项
+        shortcut::notify_shell_dir_change(&out_dir);
+        println!(
+            "note      : pinned to the taskbar folder; the tile appears when explorer restarts or at the next logon (task 17)"
+        );
+    } else {
+        println!(
+            "note      : drag the .lnk onto the taskbar to pin it visually, or re-run with --to-taskbar (task 17)"
+        );
+    }
+    Ok(())
+}
+
+/// 任务 17（Phase 2）：`unpin --group <NAME>`——从任务栏用户固定目录
+/// 删除 `<NAME>.lnk`（`pin --to-taskbar` 的反向）。安全阀：文件存在时
+/// 先回读其 AUMID，必须是本工具为该组写入的共享值才删（同名外来
+/// 快捷方式拒绝删除并报错）；文件不存在 = 未固定，幂等报告退出 0。
+fn cmd_unpin(args: &[String]) -> Result<(), String> {
+    let mut group: Option<String> = None;
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        match a.as_str() {
+            "--group" => group = Some(next_arg(&mut it, "--group")?.clone()),
+            other => return Err(format!("usage: unpin: unknown argument '{other}'")),
+        }
+    }
+    let group_name = group.ok_or("usage: unpin: --group <NAME> is required")?;
+    let expected = appid::group_aumid(&group_name).map_err(|e| format!("usage: unpin: {e}"))?;
+    let dir = shortcut::pinned_taskbar_dir().map_err(|e| format!("unpin: {e}"))?;
+    let path = dir.join(shortcut::lnk_file_name(&group_name));
+    if !path.exists() {
+        println!("unpin     : group '{group_name}' is not pinned; nothing to remove");
+        return Ok(());
+    }
+    // 回读 AUMID 并验证确为本工具为该组写入（防误删用户同名快捷方式）
+    let _com = winutil::ComGuard::init()?;
+    let actual = shortcut::read_lnk_aumid(&path)?;
+    if actual != expected {
+        return Err(format!(
+            "unpin: refusing to remove '{}': its AUMID is '{actual}', expected '{expected}' (not a tile written by tbg-lite for group '{group_name}')",
+            path.display()
+        ));
+    }
+    std::fs::remove_file(&path)
+        .map_err(|e| format!("unpin: cannot remove '{}' : {e}", path.display()))?;
+    shortcut::notify_shell_dir_change(&dir);
+    println!("unpin     : removed tile '{}' (group '{group_name}')", path.display());
+    println!("taskbar   : the tile disappears when explorer restarts or at the next logon");
     Ok(())
 }

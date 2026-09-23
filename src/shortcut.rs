@@ -12,6 +12,12 @@
 //! 与期望值不一致即报错——CI 据输出行判定（任务 18 将用它做
 //! ".lnk AUMID == 运行中窗口 AUMID" 的同组断言）。
 //!
+//! 任务 17（docs/plan.md v2 §3 Phase 2）：`pin --to-taskbar` 把磁贴直接
+//! 写入用户固定目录 `%APPDATA%\...\User Pinned\TaskBar`（explorer 在
+//! 重启/登录时读取该目录呈现固定项），`unpin --group` 反向删除（先回读
+//! AUMID 确认确为本工具所写，防误删用户同名快捷方式）。两向均辅以
+//! `SHChangeNotify` 通知 shell 重读目录（best-effort）。
+//!
 //! 与还原映射表无关：不触碰 `tbg-restore.tsv`，因此不参与
 //! `Local\tbg-lite.map` 单实例互斥（审计 BUG-02 红线仅约束写表路径）。
 //! COM 需求：调用方线程须已初始化 COM（`winutil::ComGuard`）。
@@ -28,9 +34,49 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+// 任务 17：固定目录写入后 nudging explorer 重读该目录（SHChangeNotify，
+// 公开 Shell API；best-effort，不设门禁——任务栏何时呈现固定项由 shell 决定）
+use windows::Win32::UI::Shell::{SHChangeNotify, SHCNF_PATHW, SHCNE_UPDATEDIR};
 
 /// 默认输出子目录名（数据目录下，`restoremap::data_dir()/pin`）。
 pub(crate) const PIN_DIR_NAME: &str = "pin";
+
+/// 用户固定目录下"固定到任务栏"子目录（相对 %APPDATA% 的路径；该路径
+/// 自 Win7 以来固定不变且不随显示语言本地化）。plan v2 任务 17 指定方案：
+/// 直接把带共享 AUMID 的 `.lnk` 写入此目录 = 固定；删除 = 取消固定。
+const TASKBAR_PINNED_REL: &str = r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar";
+
+/// `%APPDATA%\<TASKBAR_PINNED_REL>` 拼接（纯逻辑，供单测与 cmd 层复用）。
+pub(crate) fn pinned_dir_from(appdata: &Path) -> PathBuf {
+    appdata.join(TASKBAR_PINNED_REL)
+}
+
+/// 固定到任务栏的目标目录：`%APPDATA%\Microsoft\Internet Explorer\
+/// Quick Launch\User Pinned\TaskBar`（plan v2 §3 任务 17）。%APPDATA%
+/// 缺失（服务化环境）时 Err——与 restoremap::data_dir 的回退策略不同，
+/// 固定目录只此一处、没有合理回退，宁可报错也不写错地方。
+pub(crate) fn pinned_taskbar_dir() -> Result<PathBuf, String> {
+    match std::env::var_os("APPDATA") {
+        Some(v) if !v.is_empty() => Ok(pinned_dir_from(&PathBuf::from(v))),
+        _ => Err("APPDATA is not set; cannot locate the taskbar pinned folder".to_string()),
+    }
+}
+
+/// 通知 shell 某目录内容已变化（SHChangeNotify，best-effort：失败仅忽略，
+/// 不影响 pin/unpin 的返回——固定项的最终呈现时机由 explorer 决定，
+/// 保底生效点是下次 explorer 重启/登录）。
+pub(crate) fn notify_shell_dir_change(dir: &Path) {
+    let mut wide: Vec<u16> = dir.as_os_str().encode_wide().collect();
+    wide.push(0);
+    unsafe {
+        SHChangeNotify(
+            SHCNE_UPDATEDIR,
+            SHCNF_PATHW,
+            Some(wide.as_ptr().cast()),
+            None,
+        );
+    }
+}
 
 /// `create_pin` 的结果（供 CLI 层输出与测试消费）。
 pub(crate) struct PinOutcome {
@@ -244,6 +290,23 @@ mod tests {
         assert_eq!(
             pin_dir(Path::new(r"C:\Users\x\AppData\Local\tbg-lite")),
             PathBuf::from(r"C:\Users\x\AppData\Local\tbg-lite\pin")
+        );
+    }
+
+    #[test]
+    fn pinned_dir_from_appdata() {
+        // 任务 17：固定目录 = %APPDATA% 下固定相对路径（不本地化、Win7 起不变）
+        assert_eq!(
+            pinned_dir_from(Path::new(r"C:\Users\x\AppData\Roaming")),
+            PathBuf::from(
+                r"C:\Users\x\AppData\Roaming\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+            )
+        );
+        assert_eq!(
+            pinned_dir_from(Path::new(r"D:\roam")),
+            PathBuf::from(
+                r"D:\roam\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
+            )
         );
     }
 }

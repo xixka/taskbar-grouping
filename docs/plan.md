@@ -24,17 +24,17 @@
 ## §1 现状（截至任务 16/19，含 Phase R 22-26）
 
 - 已完成任务 0–14、16、19 与审计修复 22–26（每任务一提交，见 git log）；任务 15
-  模板已建（真机填写待维护者）：CLI 八命令（`inspect` / `set` / `watch`
+  模板已建（真机填写待维护者）：CLI 九命令（`inspect` / `set` / `watch`
   双线路 / `restore` 双路径 / `install` / `uninstall` / `status` / `pin`
-  ——任务 16：为线路二分组生成带 `TBG.Group.<NAME>` AUMID 的 `.lnk` 固定
-  磁贴，落盘回读自校验）、事件驱动
+  （任务 16 + 任务 17：`--to-taskbar` 写入用户固定目录）/ `unpin`
+  （任务 17：反向删除，AUMID 验证防误删））、事件驱动
   （SetWinEventHook 零注入）、线路二还原映射（`tbg-restore.tsv`，防 HWND
   复用）、启动扫存量（任务 13：开启即全量取消分组，对齐 mod 默认）、无参数
   交互菜单（任务 14：菜单启动/停止 watch、还原、inspect、退出，无需
   Ctrl+C）、开机自启三命令（任务 19：HKCU Run，无需管理员；`status` 速览
   自启/标记窗口/映射表）、审计修复（原子写/单实例/标记严格校验/钉 SHA 等）；
   CI 四 job
-  （`build` 编译+单测门禁 / `lockfile` 新鲜度 / `runtime-smoke` 59 断言 /
+  （`build` 编译+单测门禁 / `lockfile` 新鲜度 / `runtime-smoke` 72 断言 /
   `phase0b-acceptance` 30 断言）。
 - 验收关键数据（详见验收报告）：双线路 50 窗口压测 0 漏检 0 回写 0 写失败；UIA 证实
   线路一每窗口独立按钮、线路二 50 窗合并单组、还原回原生；工作集 9.15 MB；explorer
@@ -94,8 +94,18 @@
       默认/自定义目录落盘×4、覆盖重跑、回读验证），断言 47→59；新增 5 项
       纯逻辑单元测试（图标规格×4 + 磁贴文件名/目录拼接），单测 33→38。
       实际固定到任务栏（写入用户固定目录 / shell 固定 API）属任务 17。
-- [ ] **任务 17**：固定到任务栏——写入用户固定目录（`%AppData%\Microsoft\Internet
+- [x] **任务 17**：固定到任务栏——写入用户固定目录（`%AppData%\Microsoft\Internet
       Explorer\Quick Launch\User Pinned\TaskBar`）或经 shell 固定 API；`unpin` 反向。
+      完成：`pin --to-taskbar`（与 `--out` 互斥）把带共享 AUMID 的磁贴直接
+      写入用户固定目录（plan 指定方案；落盘回读自校验沿用任务 16 路径），
+      `unpin --group <NAME>` 反向删除——删除前回读 AUMID 验证确为本工具为
+      该组写入（同名外来快捷方式拒绝并退出 1，防误删）；幂等（未固定时
+      报告并退出 0）；两向均辅以 `SHChangeNotify(SHCNE_UPDATEDIR)` 通知
+      shell 重读目录（best-effort；任务栏在 explorer 重启/登录时呈现固定项，
+      视觉验收归任务 18）。CI runtime-smoke 新增 Phase T（13 断言：用法
+      错误×2、固定目录落盘+回读验证×3、unpin 删除×2、幂等、外来同名
+      拒删×4 含 WScript.Shell 构造探针），断言 59→72；新增 1 项单元测试
+      （固定目录路径拼接），单测 38→39。
 - [ ] **任务 18**：线路二 × 固定磁贴联动验收——CI 断言 `.lnk` 的 AUMID 与运行中窗口
       共享 AUMID 一致（同组判定）；真机视觉清单（磁贴与运行窗口合并显示）。
 
@@ -167,7 +177,7 @@ DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任
 | 层面 | 方法 |
 |---|---|
 | 编译门禁 | CI `build`（windows-latest，`cargo build --release --locked` + `cargo test --locked`，任务 22b/23） |
-| 双线路行为回归 | CI `runtime-smoke`（59 断言，含启动扫存量、交互菜单、自启 Phase I 与 pin Phase P）+ `phase0b-acceptance`（30 断言），每次 push |
+| 双线路行为回归 | CI `runtime-smoke`（72 断言，含启动扫存量、交互菜单、自启 Phase I、pin Phase P 与固定/取消固定 Phase T）+ `phase0b-acceptance`（30 断言），每次 push |
 | 固定磁贴联动 | CI 断言（任务 18） |
 | 真机清单 | 竞态感知率、覆盖矩阵全量、长时回写、视觉细节、explorer 重启（验收报告 §5） |
 | 内存/体积 | 验收报告口径；发布前回填 `BENCHMARK.md`（任务 21） |

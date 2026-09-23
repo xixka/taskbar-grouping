@@ -577,6 +577,70 @@ try {
   Remove-Item (Join-Path $env:LOCALAPPDATA 'tbg-lite\pin\pinsmoke.lnk') -ErrorAction SilentlyContinue
 }
 
+# --------------------------- phase T: pin --to-taskbar / unpin (task 17)
+# The tile is written straight into the per-user taskbar pinned folder
+# (%APPDATA%\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar),
+# verified on disk, then removed again by `unpin`. The safety valve (a foreign
+# .lnk with the same file name must be REFUSED) is exercised with a plain
+# WScript.Shell shortcut that carries no AUMID. When the tile becomes visible
+# (explorer restart / logon) is task 18's business - Phase L restarts
+# explorer and asserts the button.
+try {
+  Log '=== Phase T: pin --to-taskbar / unpin (task 17) ==='
+  $notepadExe = Join-Path $env:WINDIR 'System32\notepad.exe'
+  $pinnedDir  = Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar'
+  $tilePath   = Join-Path $pinnedDir 'tsmoke.lnk'
+
+  # --- usage errors: exit code 2 (stderr captured via Start-Watch) ---
+  $t1 = Start-Watch @('pin','--group','tsmoke','--target',$notepadExe,'--to-taskbar','--out','C:\somewhere') 'pin-t-usage-conflict.log'
+  $null = $t1.WaitForExit(30000); $t1.WaitForExit(); Flush-WatchLogs $t1
+  Assert ($t1.ExitCode -eq 2) "pin taskbar usage: --to-taskbar with --out exits 2 (got $($t1.ExitCode))"
+
+  $t2 = Start-Watch @('unpin') 'unpin-usage-noargs.log'
+  $null = $t2.WaitForExit(30000); $t2.WaitForExit(); Flush-WatchLogs $t2
+  Assert ($t2.ExitCode -eq 2) "unpin usage: missing --group exits 2 (got $($t2.ExitCode))"
+  $t2err = Get-Content (Join-Path $out 'unpin-usage-noargs.err.log') -Raw
+  Assert ($t2err -cmatch 'usage:') 'unpin usage: stderr carries the usage message'
+
+  # --- happy path: pin --to-taskbar writes the tile into the pinned folder ---
+  $pinOut = & $exe pin --group tsmoke --target "$notepadExe" --to-taskbar | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($pinOut -cmatch 'aumid\s*:\s*TBG\.Group\.tsmoke') -and ($pinOut -cmatch 'verified')) 'pin taskbar: --to-taskbar exits 0 with the AUMID read back and verified'
+  Assert (Test-Path $tilePath) "pin taskbar: tile exists in the pinned taskbar folder ($tilePath)"
+  Assert ($pinOut -cmatch 'pinned to the taskbar folder') 'pin taskbar: output explains when the tile becomes visible'
+
+  # --- unpin removes it (and the folder keeps working afterwards) ---
+  $unOut = & $exe unpin --group tsmoke | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($unOut -cmatch 'unpin\s*:\s*removed tile')) 'unpin: exits 0 and reports the removed tile'
+  Assert (-not (Test-Path $tilePath)) 'unpin: tile gone from the pinned taskbar folder'
+
+  # --- unpin is idempotent: nothing to remove exits 0 ---
+  $unOut2 = & $exe unpin --group tsmoke | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($unOut2 -cmatch 'not pinned; nothing to remove')) 'unpin: second run exits 0 with nothing to remove (idempotent)'
+
+  # --- safety valve: a FOREIGN .lnk with the same name must be refused ---
+  # (plain WScript.Shell shortcut - no AUMID, definitely not ours)
+  $foreignPath = Join-Path $pinnedDir 'tsmoke2.lnk'
+  $ws = New-Object -ComObject WScript.Shell
+  $sc = $ws.CreateShortcut($foreignPath)
+  $sc.TargetPath = $notepadExe
+  $sc.Description = 'not a tbg-lite tile'
+  $sc.Save()
+  Assert (Test-Path $foreignPath) 'unpin refuse: foreign same-name .lnk created for the refusal probe'
+  $t3 = Start-Watch @('unpin','--group','tsmoke2') 'unpin-refuse.log'
+  $null = $t3.WaitForExit(30000); $t3.WaitForExit(); Flush-WatchLogs $t3
+  Assert ($t3.ExitCode -eq 1) "unpin refuse: foreign tile refused with exit 1 (got $($t3.ExitCode))"
+  $t3err = Get-Content (Join-Path $out 'unpin-refuse.err.log') -Raw
+  Assert ($t3err -cmatch 'refusing to remove') 'unpin refuse: stderr explains the refusal (AUMID mismatch)'
+  Assert (Test-Path $foreignPath) 'unpin refuse: the foreign .lnk was NOT deleted'
+} catch {
+  Fail "phase T crashed: $($_.Exception.Message)"
+  Log $_.ScriptStackTrace
+} finally {
+  # hygiene: never leave test tiles behind on the runner (not an assertion)
+  Remove-Item (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\tsmoke.lnk')  -ErrorAction SilentlyContinue
+  Remove-Item (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\tsmoke2.lnk') -ErrorAction SilentlyContinue
+}
+
 # --------------------------- phase C: explorer/taskbar feasibility probe
 # Best effort only (no assertions): can this session host a real taskbar?
 try {

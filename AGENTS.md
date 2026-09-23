@@ -22,13 +22,19 @@ Phase 0b（任务 5-10）已验收：runtime-smoke + phase0b-acceptance 断言�
 （docs/phase0b-acceptance.md），UIA 证实双线路任务栏层效果；
 任务 13 起 runtime-smoke 扩至 20 项断言（含启动扫存量），任务 14 起扩至
 33 项（含交互菜单 Phase M），任务 19 起扩至 47 项（含自启 Phase I），
-任务 16 起扩至 59 项（含 pin Phase P）。
+任务 16 起扩至 59 项（含 pin Phase P），任务 17 起扩至 72 项（含
+固定/取消固定 Phase T）。
 
-**固定磁贴（任务 16，Phase 2）**：`pin` 命令为线路二分组生成带共享
+**固定磁贴（任务 16/17，Phase 2）**：`pin` 命令为线路二分组生成带共享
 AUMID `TBG.Group.<NAME>` 的 `.lnk`（`src/shortcut.rs`，mklnkwaumid
 直译）：磁贴与被 watch 改写的运行中窗口共享同一 AUMID，任务栏据此
-归组（视觉合并验收属任务 17/18）。落盘后独立 Load 回读自校验，不成功
-不报告成功；不触碰还原表故不参与单实例互斥。
+归组（视觉合并验收属任务 18）。落盘后独立 Load 回读自校验，不成功
+不报告成功；不触碰还原表故不参与单实例互斥。任务 17：`pin
+--to-taskbar` 把磁贴直接写入用户固定目录 `%APPDATA%\...\User
+Pinned\TaskBar`（与 `--out` 互斥），`unpin --group` 反向删除——删前
+回读 AUMID 验证确为本工具所写（同名外来快捷方式拒删退出 1）；两向
+辅以 `SHChangeNotify` 通知 shell（best-effort；固定项在 explorer
+重启/登录时呈现）。
 
 **交互菜单（任务 14，2026-09-22 维护者改版）**：无参数启动 `tbg-lite` 进入
 交互菜单（`src/menu.rs`）——`[1]`/`[2]` 启动线路一/线路二 watch（后台线程 +
@@ -51,14 +57,17 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 - `cargo build --release` —— 唯一经验证的构建命令；提取自
   `.github/workflows/ci.yml`，已由 CI 实际运行通过（windows-latest）。本仓库验收
   门禁 = 该命令在 CI 绿灯。
-- `ci/runtime-smoke.ps1` —— CI 运行时冒烟（任务 9 + 13 + 14 + 19 + 16，
+- `ci/runtime-smoke.ps1` —— CI 运行时冒烟（任务 9 + 13 + 14 + 19 + 16
+  + 17，
   `runtime-smoke` job）：在 windows-latest 真实会话拉起 notepad 窗口，断言
   双线路 AUMID 改写/复原、任务 13 启动扫存量（Phase 0 线路一 / Phase B
   线路二预开窗口断言）、任务 14 交互菜单（Phase M 双会话：stdin 预写驱动，
   无参启动 → 菜单启停 watch/还原/退出，全程无 Ctrl+C）、任务 19 自启
   （Phase I：双线路 install 注册值逐字节比对、status 三块状态、幂等卸载、
-  用法错误退出码 2）与任务 16 pin（Phase P：.lnk 磁贴落盘与回读验证、
-  默认/自定义目录、覆盖重跑、用法错误×5）；59 项断言；仅由 CI 执行，
+  用法错误退出码 2）、任务 16 pin（Phase P：.lnk 磁贴落盘与回读验证、
+  默认/自定义目录、覆盖重跑、用法错误×5）与任务 17 固定/取消固定
+  （Phase T：--to-taskbar 写入用户固定目录、unpin 删除/幂等、同名外来
+  .lnk 拒删安全阀）；72 项断言；仅由 CI 执行，
   本地未验证。
 - `ci/phase0b-accept.ps1` —— CI Phase 0b 验收套件（任务 10，
   `phase0b-acceptance` job）：双线路各 50 窗口压测 + 常驻内存 <10MB 判定
@@ -67,11 +76,12 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   仅由 CI 执行，本地未验证。
 - 禁止本地执行 cargo 构建/运行（本地无 Rust 工具链，且维护者明确禁止）；一切编译
   验证走 CI。
-- `cargo test`（任务 23 起）：38 项纯逻辑单元测试（任务 19 增自启命令行组装/
+- `cargo test`（任务 23 起）：39 项纯逻辑单元测试（任务 19 增自启命令行组装/
   路径词典法规范化/wide 终止符/REG_SZ 编解码往返/映射表只读状态三态 5 项；
-  任务 16 增 pin 图标规格解析×4 + 磁贴文件名/目录拼接 1 项）
+  任务 16 增 pin 图标规格解析×4 + 磁贴文件名/目录拼接 1 项；任务 17 增
+  任务栏固定目录路径拼接 1 项）
   ——计数勘误：此前称 35 项系虚报，run 35700057611 build 日志实数 28 项，
-  28+5+5=38；纳入 build job 门禁
+  28+5+5+1=39；纳入 build job 门禁
   （`cargo test --locked`）；`cargo build --release --locked`（任务 22b 起）。
 - `cargo fmt` / `cargo clippy` 未配置、未验证 → 见"待确认"（需一次性格式
   化任务，见审计 P2-14）。
@@ -82,7 +92,8 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   `inspect`（含 `--json` 机器可读）/ `set` / `watch`（双线路
   `--strategy ungroup|group` 切换）/ `restore`（双线路还原 + `--dry-run`
   预览）/ `install` / `uninstall` / `status`（任务 19 开机自启与状态速览）/
-  `pin`（任务 16 生成线路二分组磁贴 .lnk）；
+  `pin`（任务 16 生成线路二分组磁贴 .lnk；任务 17 `--to-taskbar` 写入
+  用户固定目录）/ `unpin`（任务 17 反向删除，AUMID 验证防误删、幂等）；
   panic hook 管道断裂优雅退出；用法错误退出码 2
 - `src/menu.rs` —— 交互菜单（任务 14）：watch 后台线程化（停止标志优雅
   退出，取代 Ctrl+C）、复用 cmd_inspect/cmd_restore、stdin EOF 优雅退出
@@ -100,14 +111,17 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   读/写/删（install 覆盖式、uninstall 幂等、read_command 只读；REG_SZ
   UTF-16LE 编解码含往返单测）；注册命令 = 当前 exe + `watch` 参数尾
   （`--duration 0` 常驻，宿主生命周期归任务 20）
-- `src/shortcut.rs` —— 固定磁贴（任务 16）：`create_pin` 生成带共享
+- `src/shortcut.rs` —— 固定磁贴（任务 16/17）：`create_pin` 生成带共享
   AUMID 的 `.lnk`（IShellLinkW + IPropertyStore + IPersistFile，mklnkwaumid
-  直译）与 `read_lnk_aumid` 独立回读（任务 18 同组断言复用）；图标规格
-  宽容式逗号切分（纯逻辑单测）；不触碰还原表故不参与单实例互斥
+  直译）与 `read_lnk_aumid` 独立回读（任务 18 同组断言复用）；任务 17：
+  `pinned_taskbar_dir`（用户固定目录）、`notify_shell_dir_change`
+  （SHChangeNotify best-effort）；图标规格宽容式逗号切分（纯逻辑单测）；
+  不触碰还原表故不参与单实例互斥
 - `src/winutil.rs` —— 窗口/COM/字符串工具（枚举、应用窗口判定、cloak 检测）
-- `ci/runtime-smoke.ps1` —— CI 运行时冒烟脚本（任务 9 + 13 + 14 + 19 + 16；
+- `ci/runtime-smoke.ps1` —— CI 运行时冒烟脚本（任务 9 + 13 + 14 + 19 + 16
+  + 17；
   双线路 AUMID 断言 + 启动扫存量断言 + 交互菜单 Phase M + 截图/explorer 探针
-  + 自启 Phase I + pin Phase P，输出在 ci/out 工件）
+  + 自启 Phase I + pin Phase P + 固定/取消固定 Phase T，输出在 ci/out 工件）
 - `ci/phase0b-accept.ps1` —— CI Phase 0b 验收套件（任务 10；50 窗口压测/
   内存/多应用覆盖/Edge 回写探针/UIA 任务栏按钮，输出在 ci/out 工件）
 - `Cargo.toml` —— windows 0.58 依赖 feature 组；体积导向 release profile
