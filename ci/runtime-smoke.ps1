@@ -43,6 +43,11 @@
 #             carry the tile's exact AUMID (same group), and the button
 #             must merge with the running windows (UIA name reports the
 #             running-window count). Restore + unpin return to clean state.
+#   Phase X - task 20 resident-host hardening: ring log (--log), explorer
+#             restart detection mid-watch (pid change -> re-sweep, ring
+#             log evidence, hooks alive for new windows), and the circuit
+#             breaker (3 forced abnormal exits -> 4th start uninstalls the
+#             autostart entry; 5th start must not trip again).
 #   Phase C - explorer/taskbar feasibility probe (best effort, no
 #             assertions): screenshots only, to see whether a real taskbar
 #             can be hosted in this session.
@@ -795,6 +800,110 @@ try {
 } finally {
   # hygiene: tiles restored, test windows closed, explorer left running
   Remove-Item (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar\lnk18.lnk') -ErrorAction SilentlyContinue
+  if (-not (Get-Process -Name explorer -ErrorAction SilentlyContinue)) {
+    Start-Process -FilePath 'explorer.exe'
+  }
+  Clear-TestWindows
+}
+
+# ------------------- phase X: task 20 (shell restart / ring log / breaker) --
+# X1 ring log: watch --log writes the bounded ring log (start/stop lines).
+# X2 explorer restart: mid-watch the shell is killed and auto-restarts; the
+#    watch must detect the new shell pid, re-sweep (ring log 'shell restart'),
+#    keep the notepad marked, and still handle NEW windows afterwards (the
+#    out-of-context hooks live in our own process and survive the restart).
+# X3 circuit breaker: install autostart, kill the resident watch 3x within
+#    the abnormal-uptime window (< 30 s) - the 4th start must trip the
+#    breaker (message + HKCU Run value removed) and still run gracefully;
+#    the 5th start must NOT trip again (streak was reset).
+try {
+  Log '=== Phase X: task 20 - shell restart / ring log / circuit breaker ==='
+  $logPath = Join-Path $env:LOCALAPPDATA 'tbg-lite\tbg.log'
+  $runKeyPath = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+
+  # --- X1: ring log ---
+  if (Test-Path $logPath) { Remove-Item $logPath -Force }   # start clean
+  $x1 = Start-Watch @('watch','--duration','6','--strategy','ungroup','--log') 'watch-x1-ringlog.log'
+  Wait-Watch $x1 60
+  $x1Log = Get-Content (Join-Path $out 'watch-x1-ringlog.log') -Raw
+  Assert ($x1Log -cmatch 'ring log enabled') 'x1 ringlog: watch announces the ring log when --log is on'
+  Assert (Test-Path $logPath) "x1 ringlog: tbg.log exists in the data directory ($logPath)"
+  $ring1 = if (Test-Path $logPath) { Get-Content $logPath -Raw } else { '' }
+  Assert ($ring1 -cmatch 'watch start') 'x1 ringlog: start line present in tbg.log'
+  Assert ($ring1 -cmatch 'watch stop') 'x1 ringlog: graceful-stop line present in tbg.log'
+  Copy-Item $logPath (Join-Path $out 'tbg-x1.log') -ErrorAction SilentlyContinue
+
+  # --- X2: explorer restart mid-watch ---
+  $watch = Start-Watch @('watch','--duration','60','--strategy','ungroup','--log','--verbose') 'watch-x2-restart.log'
+  Start-Sleep -Seconds 2
+  $x2Notepads = Spawn-Notepads 1
+  Start-Sleep -Seconds 3
+  $beforeRestart = Get-WindowAumid $x2Notepads[0].Hwnd
+  Log ("x2: notepad aumid before the shell restart: '{0}'" -f $beforeRestart)
+  Assert ($beforeRestart -cmatch '~TBG~w[0-9A-F]{1,16}$') 'x2 restart: notepad marked before the shell restart'
+
+  $newShellPid = Restart-ExplorerShell
+  Assert ($newShellPid -gt 0) "x2 restart: explorer restarted (new shell pid $newShellPid)"
+
+  # poll the ring log for the restart detection (watch polls every 2 s)
+  $sawRestart = $false
+  $deadline = (Get-Date).AddSeconds(30)
+  while ((Get-Date) -lt $deadline) {
+    if ((Test-Path $logPath) -and ((Get-Content $logPath -Raw) -cmatch 'shell restart')) { $sawRestart = $true; break }
+    Start-Sleep -Seconds 2
+  }
+  Copy-Item $logPath (Join-Path $out 'tbg-x2.log') -ErrorAction SilentlyContinue
+  Assert $sawRestart 'x2 restart: ring log records the shell restart (pid change detected)'
+
+  $afterRestart = Get-WindowAumid $x2Notepads[0].Hwnd
+  Log ("x2: notepad aumid after the shell restart: '{0}'" -f $afterRestart)
+  Assert ($afterRestart -cmatch '~TBG~w[0-9A-F]{1,16}$') 'x2 restart: notepad still marked after the restart (AUMID survived or re-applied by the re-sweep)'
+
+  # hooks survive the shell restart: a NEW window opened now must be marked
+  $x2Notepads2 = Spawn-Notepads 1
+  Start-Sleep -Seconds 3
+  $newAfterRestart = Get-WindowAumid $x2Notepads2[0].Hwnd
+  Assert ($newAfterRestart -cmatch '~TBG~w[0-9A-F]{1,16}$') 'x2 restart: a window opened AFTER the restart still gets marked (hooks alive)'
+
+  Wait-Watch $watch 120
+  $x2Log = Get-Content (Join-Path $out 'watch-x2-restart.log') -Raw
+  Assert ($x2Log -cmatch 'shell restarts \(task 20\)\s*:\s*([1-9]\d*)') "x2 restart: watch stats report >= 1 shell restart (log says: $(if ($x2Log -match 'shell restarts \(task 20\)\s*:\s*(\d+)') { $Matches[1] } else { 'missing' }))"
+  Assert ($x2Log -cmatch 'resweep \(task 20\)') 'x2 restart: re-sweep activity line present in the watch log'
+  $restoreOut = & $exe restore | Out-String
+  Assert ($LASTEXITCODE -eq 0) 'x2 restart: restore cleanup exited 0'
+
+  # --- X3: circuit breaker (3 quick kills -> 4th start trips) ---
+  Log 'x3 breaker: installing autostart, then killing the resident watch 3 times'
+  & $exe install | Out-Null
+  Assert ($null -ne (Get-ItemProperty -Path $runKeyPath -Name 'tbg-lite' -ErrorAction SilentlyContinue)) 'x3 breaker: autostart value present before the kill cycles'
+  for ($i = 1; $i -le 3; $i++) {
+    $k = Start-Watch @('watch','--duration','0','--strategy','ungroup') ("watch-x3-kill-$i.log")
+    Start-Sleep -Seconds 2      # uptime < 30 s -> counts as an abnormal exit
+    if (-not $k.HasExited) { $k.Kill() }
+    $k.WaitForExit()
+    Flush-WatchLogs $k
+    Log "x3 breaker: kill cycle $i done (forced, uptime ~2 s)"
+  }
+  $x4 = Start-Watch @('watch','--duration','5','--strategy','ungroup') 'watch-x3-breaker.log'
+  Wait-Watch $x4 60
+  $x4Log = Get-Content (Join-Path $out 'watch-x3-breaker.log') -Raw
+  $x4Err  = Get-Content (Join-Path $out 'watch-x3-breaker.err.log') -Raw
+  Assert (($x4Log + $x4Err) -cmatch 'circuit breaker \(task 20\)') 'x3 breaker: 4th start reports the circuit breaker (3 consecutive abnormal exits)'
+  Assert (($x4Log + $x4Err) -cmatch 'autostart removed') 'x3 breaker: the breaker removed the autostart entry'
+  Assert ($null -eq (Get-ItemProperty -Path $runKeyPath -Name 'tbg-lite' -ErrorAction SilentlyContinue)) 'x3 breaker: HKCU Run value is gone after the trip'
+  Assert ($x4.ExitCode -eq 0) "x3 breaker: the tripped watch still runs and exits 0 (got $($x4.ExitCode))"
+  # streak was reset: a 5th start must NOT trip again
+  $x5 = Start-Watch @('watch','--duration','4','--strategy','ungroup') 'watch-x3-aftertrip.log'
+  Wait-Watch $x5 60
+  $x5Log = Get-Content (Join-Path $out 'watch-x3-aftertrip.log') -Raw
+  $x5Err  = Get-Content (Join-Path $out 'watch-x3-aftertrip.err.log') -Raw
+  Assert (-not (($x5Log + $x5Err) -cmatch 'circuit breaker')) 'x3 breaker: 5th start does not trip again (streak reset after the trip + clean exit)'
+} catch {
+  Fail "phase X crashed: $($_.Exception.Message)"
+  Log $_.ScriptStackTrace
+} finally {
+  # hygiene: never leave the autostart value or test windows behind
+  Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'tbg-lite' -ErrorAction SilentlyContinue
   if (-not (Get-Process -Name explorer -ErrorAction SilentlyContinue)) {
     Start-Process -FilePath 'explorer.exe'
   }

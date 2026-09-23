@@ -21,7 +21,7 @@
    可选先还原）；带参数启动 = CLI 行为不变。原任务的 Ctrl+C console
    control handler 与 `--restore-on-exit` 参数方案作废。
 
-## §1 现状（截至任务 16/19，含 Phase R 22-26）
+## §1 现状（截至任务 16-20，含 Phase R 22-26）
 
 - 已完成任务 0–14、16、19 与审计修复 22–26（每任务一提交，见 git log）；任务 15
   模板已建（真机填写待维护者）：CLI 九命令（`inspect` / `set` / `watch`
@@ -34,7 +34,7 @@
   Ctrl+C）、开机自启三命令（任务 19：HKCU Run，无需管理员；`status` 速览
   自启/标记窗口/映射表）、审计修复（原子写/单实例/标记严格校验/钉 SHA 等）；
   CI 四 job
-  （`build` 编译+单测门禁 / `lockfile` 新鲜度 / `runtime-smoke` 85 断言 /
+  （`build` 编译+单测门禁 / `lockfile` 新鲜度 / `runtime-smoke` 104 断言 /
   `phase0b-acceptance` 30 断言）。
 - 验收关键数据（详见验收报告）：双线路 50 窗口压测 0 漏检 0 回写 0 写失败；UIA 证实
   线路一每窗口独立按钮、线路二 50 窗合并单组、还原回原生；工作集 9.15 MB；explorer
@@ -131,10 +131,19 @@
       35 项系虚报，run 35700057611 build 日志实数 28 项，本次实测
       28+5=33 项。自启进程
       控制台窗口可见性与常驻宿主生命周期归任务 20。
-- [ ] **任务 20**：explorer 重启监视与自动重应用——宿主轮询 explorer PID（2 s 级），
+- [x] **任务 20**：explorer 重启监视与自动重应用——宿主轮询 explorer PID（2 s 级），
       重启后自动重扫重标记（验收报告 §5-5：窗口属性可能随 explorer 重启丢失）；
-      环形日志（`%LOCALAPPDATA%\tbg\tbg.log`，默认关闭）；连续异常退出熔断（自动
-      注销自启，防开机死循环）。
+      环形日志（`%LOCALAPPDATA%\tbg-lite\tbg.log`，默认关闭，256 KiB 上限截半）；
+      连续异常退出熔断（自动注销自启，防开机死循环）。
+      完成：`src/ringlog.rs`（--log 开关默认关、超限截半 tmp+rename 原子
+      替换）+ `src/health.rs`（tbg-health.tsv 记账：短命消失 <30s 累计、
+      长寿命强杀清零、连续 3 次熔断→注销自启后归零；记账核心纯函数
+      时钟注入）；winevent.rs 消息泵 2s 轮询 GetShellWindow→PID（常驻
+      模式 wait 由 INFINITE 改 2s，Ctrl+C 行为不变），PID 变化即全量
+      重扫（resweep_* 统计口径，幂等复用 consider 链）。CI runtime-smoke
+      新增 Phase X（18 断言：环形日志 4、重启检测/重扫/存活/钩子存续 8、
+      熔断三轮强杀→第四次注销自启+第五次不再熔断 6），断言 86→104；
+      新增 8 项单元测试（环形截半×3 + 熔断记账×5），单测 39→47。
 - [ ] **任务 21**：发布准备——README（与 Windhawk 共存注意）、LICENSE 定稿、
       `BENCHMARK.md`（体积/内存实测回填，对照 plan v1 §6 预算）、tag + GitHub
       Release 流程。SEC-04 注记：发布物附 SHA256 + GitHub Release
@@ -185,7 +194,7 @@ DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任
 | 层面 | 方法 |
 |---|---|
 | 编译门禁 | CI `build`（windows-latest，`cargo build --release --locked` + `cargo test --locked`，任务 22b/23） |
-| 双线路行为回归 | CI `runtime-smoke`（85 断言，含启动扫存量、交互菜单、自启 Phase I、pin Phase P、固定/取消固定 Phase T 与磁贴联动 Phase L）+ `phase0b-acceptance`（30 断言），每次 push |
+| 双线路行为回归 | CI `runtime-smoke`（104 断言，含启动扫存量、交互菜单、自启 Phase I、pin Phase P、固定/取消固定 Phase T、磁贴联动 Phase L 与常驻加固 Phase X）+ `phase0b-acceptance`（30 断言），每次 push |
 | 固定磁贴联动 | CI 断言（任务 18，Phase L：.lnk AUMID == 运行窗口 AUMID + UIA 合并按钮，已绿） |
 | 真机清单 | 竞态感知率、覆盖矩阵全量、长时回写、视觉细节、explorer 重启（验收报告 §5） |
 | 内存/体积 | 验收报告口径；发布前回填 `BENCHMARK.md`（任务 21） |

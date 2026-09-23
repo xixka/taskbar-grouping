@@ -23,7 +23,8 @@ Phase 0b（任务 5-10）已验收：runtime-smoke + phase0b-acceptance 断言�
 任务 13 起 runtime-smoke 扩至 20 项断言（含启动扫存量），任务 14 起扩至
 33 项（含交互菜单 Phase M），任务 19 起扩至 47 项（含自启 Phase I），
 任务 16 起扩至 59 项（含 pin Phase P），任务 17 起扩至 72 项（含
-固定/取消固定 Phase T），任务 18 起扩至 86 项（含磁贴联动 Phase L）。
+固定/取消固定 Phase T），任务 18 起扩至 86 项（含磁贴联动 Phase L），任务 20 起扩至 104 项
+（含常驻加固 Phase X：环形日志/explorer 重启重扫/熔断）。
 
 **固定磁贴（任务 16/17/18，Phase 2）**：`pin` 命令为线路二分组生成带共享
 AUMID `TBG.Group.<NAME>` 的 `.lnk`（`src/shortcut.rs`，mklnkwaumid
@@ -63,7 +64,7 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   `.github/workflows/ci.yml`，已由 CI 实际运行通过（windows-latest）。本仓库验收
   门禁 = 该命令在 CI 绿灯。
 - `ci/runtime-smoke.ps1` —— CI 运行时冒烟（任务 9 + 13 + 14 + 19 + 16 + 17
-  + 18，
+  + 18 + 20，
   `runtime-smoke` job）：在 windows-latest 真实会话拉起 notepad 窗口，断言
   双线路 AUMID 改写/复原、任务 13 启动扫存量（Phase 0 线路一 / Phase B
   线路二预开窗口断言）、任务 14 交互菜单（Phase M 双会话：stdin 预写驱动，
@@ -74,7 +75,9 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   （Phase T：--to-taskbar 写入用户固定目录、unpin 删除/幂等、同名外来
   .lnk 拒删安全阀）与任务 18 磁贴联动（Phase L：重启 explorer 后 UIA
   断言磁贴为真实任务栏按钮、运行窗口 AUMID == 磁贴 AUMID 同组、按钮
-  与运行窗口合并）；86 项断言；仅由 CI 执行，
+  与运行窗口合并）与任务 20 常驻加固（Phase X：--log 环形日志、
+  explorer 重启检测+重扫+钩子存续、三轮强杀后熔断注销自启）；104 项
+  断言；仅由 CI 执行，
   本地未验证。
 - `ci/phase0b-accept.ps1` —— CI Phase 0b 验收套件（任务 10，
   `phase0b-acceptance` job）：双线路各 50 窗口压测 + 常驻内存 <10MB 判定
@@ -83,12 +86,12 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   仅由 CI 执行，本地未验证。
 - 禁止本地执行 cargo 构建/运行（本地无 Rust 工具链，且维护者明确禁止）；一切编译
   验证走 CI。
-- `cargo test`（任务 23 起）：39 项纯逻辑单元测试（任务 19 增自启命令行组装/
+- `cargo test`（任务 23 起）：47 项纯逻辑单元测试（任务 19 增自启命令行组装/
   路径词典法规范化/wide 终止符/REG_SZ 编解码往返/映射表只读状态三态 5 项；
   任务 16 增 pin 图标规格解析×4 + 磁贴文件名/目录拼接 1 项；任务 17 增
-  任务栏固定目录路径拼接 1 项）
+  任务栏固定目录路径拼接 1 项；任务 20 增环形日志截半×3 + 熔断记账×5）
   ——计数勘误：此前称 35 项系虚报，run 35700057611 build 日志实数 28 项，
-  28+5+5+1=39；纳入 build job 门禁
+  28+5+5+1+8=47；纳入 build job 门禁
   （`cargo test --locked`）；`cargo build --release --locked`（任务 22b 起）。
 - `cargo fmt` / `cargo clippy` 未配置、未验证 → 见"待确认"（需一次性格式
   化任务，见审计 P2-14）。
@@ -108,12 +111,20 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   （`~TBG~w` 后缀 / `TBG.Group.` 共享前缀）
 - `src/winevent.rs` —— `watch` 实现：SetWinEventHook 事件驱动 + 双线路改写
   （apply_ungroup / apply_group）+ 启动扫存量（任务 13：开启即全量改写，
-  幂等重入/双线路互斥）+ 统计报告
+  幂等重入/双线路互斥）+ explorer 重启监视与重扫（任务 20：GetShellWindow
+  PID 2s 轮询、常驻模式 wait 2s、resweep_* 统计）+ 熔断挂载 + 统计报告
 - `src/restoremap.rs` —— 线路二还原映射表（`%LOCALAPPDATA%\tbg-lite\
   tbg-restore.tsv`，任务 22 起；原子写 tmp+fsync+rename、表头 v1、旧表
   自动迁移；防 HWND 复用校验）
 - `src/singleinstance.rs` —— 映射表单实例互斥（任务 22：
   `Local\tbg-lite.map` 命名互斥体，审计 BUG-02）
+- `src/ringlog.rs` —— 环形日志（任务 20）：`--log` 开关（默认关），
+  数据目录 tbg.log，256 KiB 上限超限截半（行边界，tmp+rename 原子替换）；
+  只记关键事件（启动/停止/扫存量/shell 重启/重扫/熔断）
+- `src/health.rs` —— 异常熔断（任务 20）：tbg-health.tsv 记账——短命消失
+  （<30s）累计、长寿命强杀清零、连续 3 次自动注销自启（防开机死循环）
+  后归零；记账核心纯函数（时钟注入）；独立状态文件，不触碰还原表/互斥
+  红线
 - `src/autostart.rs` —— 开机自启（任务 19）：HKCU Run `tbg-lite` 值的
   读/写/删（install 覆盖式、uninstall 幂等、read_command 只读；REG_SZ
   UTF-16LE 编解码含往返单测）；注册命令 = 当前 exe + `watch` 参数尾
@@ -129,8 +140,8 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   + 17 + 18；
   双线路 AUMID 断言 + 启动扫存量断言 + 交互菜单 Phase M + 截图/explorer 探针
   + 自启 Phase I + pin Phase P + 固定/取消固定 Phase T + 磁贴联动 Phase L
-  （含 UIA 任务栏按钮枚举与 explorer 重启辅助、taskbarpin/taskbarunpin
-  动词调用），输出在 ci/out 工件）
+  + 常驻加固 Phase X（含 UIA 任务栏按钮枚举与 explorer 重启辅助、
+  taskbarpin/taskbarunpin 动词调用），输出在 ci/out 工件）
 - `ci/phase0b-accept.ps1` —— CI Phase 0b 验收套件（任务 10；50 窗口压测/
   内存/多应用覆盖/Edge 回写探针/UIA 任务栏按钮，输出在 ci/out 工件）
 - `Cargo.toml` —— windows 0.58 依赖 feature 组；体积导向 release profile

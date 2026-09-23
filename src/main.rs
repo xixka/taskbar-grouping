@@ -19,8 +19,10 @@
 
 mod appid;
 mod autostart;
+mod health;
 mod menu;
 mod restoremap;
+mod ringlog;
 mod shortcut;
 mod singleinstance;
 mod winevent;
@@ -40,7 +42,7 @@ USAGE:
     tbg-lite inspect [--hwnd <HEX>] [--all] [--json]
     tbg-lite set --hwnd <HEX> (--suffix | --value <APPID>)
     tbg-lite watch [--strategy <ungroup|group>] [--group <NAME>]
-                   [--duration <SECS>] [--dry-run] [--verbose]
+                   [--duration <SECS>] [--dry-run] [--verbose] [--log]
     tbg-lite restore [--hwnd <HEX>] [--dry-run]
     tbg-lite install [--strategy <ungroup|group>] [--group <NAME>]
     tbg-lite uninstall
@@ -85,6 +87,10 @@ COMMANDS:
                                  flag; CLI mode Ctrl+C is a hard exit)
               --dry-run          log only, never write AUMID
               --verbose          also log skipped windows with reasons
+              --log              ring log to %LOCALAPPDATA%\\tbg-lite\\tbg.log
+                                 (task 20, default off; 256 KiB cap,
+                                 key events only: start/stop/sweeps/
+                                 shell restarts/circuit breaker)
     restore   restore native AppUserModelIDs (docs/plan.md task 7+8):
               line 1 strips the per-window suffix; line 2 looks the
               original value up in tbg-restore.tsv. Windows whose
@@ -380,6 +386,7 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     let mut duration_secs: u64 = 60;
     let mut dry_run = false;
     let mut verbose = false;
+    let mut ring_log = false;
     let mut strategy = winevent::WatchStrategy::Ungroup;
     let mut group: Option<String> = None;
     let mut it = args.iter();
@@ -406,6 +413,7 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
             "--group" => group = Some(next_arg(&mut it, "--group")?.clone()),
             "--dry-run" => dry_run = true,
             "--verbose" => verbose = true,
+            "--log" => ring_log = true,
             other => return Err(format!("usage: watch: unknown argument '{other}'")),
         }
     }
@@ -433,6 +441,8 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
         // CLI 参数模式：无外部停止标志（--duration 0 = Ctrl+C 强杀，
         // 原行为不变；优雅退出属菜单模式，任务 14）
         stop: None,
+        // 任务 20：--log 环形日志（默认关）
+        ring_log,
     })
 }
 

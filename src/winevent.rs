@@ -37,13 +37,16 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY, EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_SHOW, MSG,
-    MWMO_INPUTAVAILABLE, MsgWaitForMultipleObjectsEx, OBJID_WINDOW, PeekMessageW, PM_REMOVE,
-    QS_ALLINPUT, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+    EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY, EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_SHOW,
+    GetShellWindow, GetWindowThreadProcessId, MSG, MWMO_INPUTAVAILABLE,
+    MsgWaitForMultipleObjectsEx, OBJID_WINDOW, PeekMessageW, PM_REMOVE, QS_ALLINPUT,
+    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
 };
 
 use crate::appid;
+use crate::health;
 use crate::restoremap::RestoreMap;
+use crate::ringlog::RingLog;
 use crate::winutil;
 
 /// watch 的两条实现线路（任务 8，`--strategy` 切换；
@@ -84,6 +87,10 @@ pub(crate) struct WatchOptions {
     /// 摘钩 + 终扫 + 统计输出后正常返回（优雅退出，取代 Ctrl+C 方案）。
     /// None 时行为与此前完全一致。
     pub(crate) stop: Option<Arc<AtomicBool>>,
+    /// 任务 20：环形日志开关（`watch --log`；默认关）。开启后关键事件
+    /// （启动/停止/扫存量/explorer 重启/重扫/熔断）落入数据目录
+    /// tbg.log（256 KiB 上限，超限截半，原子替换）。
+    pub(crate) ring_log: bool,
 }
 
 /// 观测统计（对应 docs/plan.md §7 Phase 0b-(6) 的压测数据需求）。
@@ -113,6 +120,12 @@ struct Stats {
     /// 任务 13：启动扫存量中已带本线路标记的窗口数（幂等：重复
     /// watch 不会二次叠加后缀，直接计为已处理）。
     startup_sweep_marked: u64,
+    /// 任务 20：检测到的 explorer 重启次数（shell PID 变化）。
+    shell_restarts: u64,
+    /// 任务 20：explorer 重启后全量重扫改写的窗口数。
+    resweep_rewritten: u64,
+    /// 任务 20：重扫中已带本线路标记的窗口数（幂等命中）。
+    resweep_marked: u64,
 }
 
 struct WatcherState {
@@ -132,9 +145,18 @@ struct WatcherState {
     /// 本会话已处理（改写 / 判定跳过）的窗口（含启动扫存量的产出），
     /// 以 HWND 数值为键。
     handled: HashSet<usize>,
-    /// 正在执行启动扫存量（统计归集用；见 startup_sweep）。
-    in_sweep: bool,
+    /// 当前扫描类别（任务 13 启动扫 / 任务 20 重启重扫；None = 事件驱动），
+    /// 供 consider 链路由改写与幂等命中计数。
+    sweep_kind: SweepKind,
     stats: Stats,
+}
+
+/// 扫描类别（统计归集用；任务 13 启动扫 / 任务 20 explorer 重启重扫）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SweepKind {
+    None,
+    Startup,
+    Resweep,
 }
 
 thread_local! {
@@ -180,7 +202,7 @@ impl WatcherState {
             baseline: HashSet::new(),
             baseline_count: 0,
             handled: HashSet::new(),
-            in_sweep: false,
+            sweep_kind: SweepKind::None,
             stats: Stats::default(),
         }
     }
@@ -200,7 +222,7 @@ impl WatcherState {
     /// SHOW 事件会再评估；已带本线路标记的按已处理计（幂等）；带另一
     /// 线路标记的跳过（互斥红线，任务 8）。
     unsafe fn startup_sweep(&mut self) -> Result<(), String> {
-        self.in_sweep = true;
+        self.sweep_kind = SweepKind::Startup;
         // 审计 BUG-11（任务 24）：枚举失败上抛——基线为空会导致存量窗口
         // 在后续事件中被误当新窗口全量重标
         for hwnd in winutil::enum_top_level_windows()? {
@@ -208,7 +230,7 @@ impl WatcherState {
             self.baseline.insert(key);
             self.consider("SWEEP", hwnd, key);
         }
-        self.in_sweep = false;
+        self.sweep_kind = SweepKind::None;
         self.baseline_count = self.baseline.len() as u64;
         println!(
             "startup sweep (task 13): pre-existing windows rewritten={} already-marked={} baseline-top-level={}",
@@ -217,6 +239,28 @@ impl WatcherState {
             self.baseline_count
         );
         Ok(())
+    }
+
+    /// 任务 20：explorer 重启后的全量重扫重标记。窗口属性可能随 shell
+    /// 重启丢失（验收报告 §5-5），重扫把全部顶层窗口再过一遍 consider
+    /// 链（幂等：已标记窗口不二次叠加；被回写/丢失的当场补标）。
+    /// 与启动扫的差异仅在计数口径（resweep_*）——baseline 继续承担
+    /// DESTROY 簿记与退出复扫的"新窗口"判定，重扫改写的窗口并入
+    /// handled（退出复扫不误判为漏检）。枚举失败降级为空扫（watch
+    /// 本体继续：退出复扫仍会给出全量清单）。
+    unsafe fn resweep_all(&mut self) {
+        self.stats.shell_restarts += 1;
+        self.sweep_kind = SweepKind::Resweep;
+        for hwnd in winutil::enum_top_level_windows().unwrap_or_default() {
+            let key = hwnd.0 as usize;
+            self.baseline.insert(key);
+            self.consider("RESWEEP", hwnd, key);
+        }
+        self.sweep_kind = SweepKind::None;
+        println!(
+            "resweep (task 20): shell-restart re-sweep rewritten={} already-marked={}",
+            self.stats.resweep_rewritten, self.stats.resweep_marked
+        );
     }
 
     fn on_event(&mut self, event: u32, hwnd: HWND, idobject: i32, idchild: i32) {
@@ -345,9 +389,12 @@ impl WatcherState {
         if let Some(reason) = marked {
             if reason.starts_with("cross-line") {
                 self.stats.skipped_cross_line += 1;
-            } else if self.in_sweep {
+            } else if self.sweep_kind == SweepKind::Startup {
                 // 任务 13：启动扫存量遇已带本线路标记 → 幂等，计已处理
                 self.stats.startup_sweep_marked += 1;
+            } else if self.sweep_kind == SweepKind::Resweep {
+                // 任务 20：重启重扫遇已带本线路标记 → 幂等命中
+                self.stats.resweep_marked += 1;
             } else {
                 self.stats.skipped_already_marked += 1;
             }
@@ -387,8 +434,10 @@ impl WatcherState {
         match appid::set_aumid(hwnd, &suffixed.value) {
             Ok(()) => {
                 self.stats.rewritten += 1;
-                if self.in_sweep {
-                    self.stats.startup_sweep_rewritten += 1;
+                match self.sweep_kind {
+                    SweepKind::Startup => self.stats.startup_sweep_rewritten += 1,
+                    SweepKind::Resweep => self.stats.resweep_rewritten += 1,
+                    SweepKind::None => {}
                 }
                 println!(
                     "{} {} {} aumid={:?} -> {:?} (write {:.1}ms)",
@@ -458,8 +507,10 @@ impl WatcherState {
         match appid::set_aumid(hwnd, &shared) {
             Ok(()) => {
                 self.stats.rewritten += 1;
-                if self.in_sweep {
-                    self.stats.startup_sweep_rewritten += 1;
+                match self.sweep_kind {
+                    SweepKind::Startup => self.stats.startup_sweep_rewritten += 1,
+                    SweepKind::Resweep => self.stats.resweep_rewritten += 1,
+                    SweepKind::None => {}
                 }
                 println!(
                     "{} {} {} aumid={:?} -> {:?} (group, write {:.1}ms)",
@@ -516,6 +567,10 @@ impl WatcherState {
         println!(
             "startup sweep (task 13): pre-existing rewritten={} already-marked={}",
             self.stats.startup_sweep_rewritten, self.stats.startup_sweep_marked
+        );
+        println!(
+            "shell restarts (task 20)             : {} (resweep rewritten={} already-marked={})",
+            self.stats.shell_restarts, self.stats.resweep_rewritten, self.stats.resweep_marked
         );
         println!(
             "baseline top-level windows at start : {}",
@@ -646,6 +701,42 @@ mod tests {
 }
 
 pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
+    // 任务 20（最先执行，早于一切可能快速失败的前置）：异常熔断记账。
+    // 上一轮短命消失（< 30s，崩溃/启动即死）累计到阈值 → 注销自启，
+    // 防开机死循环；本次 watch 照常执行（熔断不是拒绝手动使用）。
+    // 注意：此后的任何早退（互斥获取失败/表加载失败/钩子失败）都不会
+    // 走 end_clean → 按异常退出累计——自启进程反复快速失败正是要熔断
+    // 的场景。
+    let health = health::begin();
+    if health.tripped {
+        eprintln!(
+            "watch: circuit breaker (task 20): {} consecutive abnormal exits detected - removing the autostart entry to break a potential boot loop",
+            health::TRIP_THRESHOLD
+        );
+        match crate::autostart::uninstall() {
+            Ok(crate::autostart::UninstallOutcome::Removed(prev)) => {
+                eprintln!("watch: circuit breaker: autostart removed (was: {prev})");
+            }
+            Ok(crate::autostart::UninstallOutcome::NotInstalled) => {
+                eprintln!("watch: circuit breaker: no autostart entry present (nothing to remove)");
+            }
+            Err(e) => eprintln!("watch: circuit breaker: removing autostart failed: {e}"),
+        }
+    }
+
+    // 任务 20：环形日志（--log，默认关）；只记关键事件，256 KiB 上限
+    let ring = RingLog::open(opts.ring_log);
+    ring.log(&format!(
+        "watch start: strategy={} group={:?} duration={:?} dry_run={}",
+        if matches!(opts.strategy, WatchStrategy::Ungroup) { "ungroup" } else { "group" },
+        opts.group_name,
+        opts.duration,
+        opts.dry_run
+    ));
+    if health.tripped {
+        ring.log("circuit breaker tripped: autostart uninstalled");
+    }
+
     // AUMID 读写（IPropertyStore）要求本线程已初始化 COM
     let _com = winutil::ComGuard::init()?;
 
@@ -701,6 +792,12 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
 
     println!("tbg-lite watch (task 6/8/13/24): SetWinEventHook CREATE/SHOW/NAMECHANGE/DESTROY, out-of-context, skip-own-process");
     println!("strategy : {}", opts.strategy.label());
+    if ring.enabled() {
+        println!(
+            "log      : ring log enabled (%LOCALAPPDATA%\\tbg-lite\\{}), 256 KiB cap (task 20)",
+            crate::ringlog::LOG_FILE_NAME
+        );
+    }
     println!("startup  : pre-existing app windows are rewritten at launch (task 13: enabling = ungroup everything)");
     if matches!(opts.strategy, WatchStrategy::Group) {
         println!(
@@ -750,12 +847,22 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
         WATCHER.with(|cell| *cell.borrow_mut() = None);
         return Err(format!("watch: startup sweep failed: {e}"));
     }
+    ring.log("startup sweep done");
 
     // 4. 消息泵：winevent 回调在 PeekMessage 检索期间由系统调用；
     //    MsgWaitForMultipleObjectsEx 让消息一到就醒来（压测时延观察更真实）
+    //    任务 20：常驻模式（--duration 0 且无停止标志）下 wait 封顶 2s
+    //    （原为 INFINITE）——宿主以 2s 级轮询 explorer PID，重启即全量
+    //    重扫重标记；Ctrl+C 硬杀行为不变
     let deadline = (!opts.duration.is_zero()).then(|| Instant::now() + opts.duration);
     let mut stopped_by_request = false;
     let mut msg = MSG::default();
+    // 任务 20：explorer 重启监视（GetShellWindow → 其属主进程 PID）。
+    // 初始 None（watch 启动时无 shell，如 CI 探针场景）→ 首次见到 Some
+    // 记为基线不触发；PID 变化 = shell 重启 → 全量重扫。NULL 窗口
+    // （重启中）不更新基线，等新 shell 出现。
+    let mut last_shell_pid = current_shell_pid();
+    let mut last_shell_poll = Instant::now();
     loop {
         // 任务 14：菜单模式的停止标志——置位即优雅退出（摘钩 + 终扫 +
         // 统计，见循环后的公共退出路径）。启动扫存量在进泵前无条件跑完，
@@ -781,12 +888,13 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
                 remain.as_millis().min(1000) as u32
             }
             // 无 deadline（常驻）：菜单模式（有停止标志）→ 1s 轮询标志；
-            // CLI 参数模式 → INFINITE（原行为：Ctrl+C 强杀，无统计）
+            // CLI 参数模式 → 2s 轮询 explorer PID（任务 20，原 INFINITE；
+            // Ctrl+C 强杀行为不变）
             None => {
                 if opts.stop.is_some() {
                     1000
                 } else {
-                    u32::MAX // INFINITE（常驻无 deadline，纯等输入）
+                    2000
                 }
             }
         };
@@ -794,6 +902,33 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
             let _ = MsgWaitForMultipleObjectsEx(None, wait_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
             while PeekMessageW(&mut msg, HWND::default(), 0, 0, PM_REMOVE).as_bool() {
                 // 线程消息无窗口过程，检索即消费；winevent 回调在其中触发
+            }
+        }
+        // 任务 20：explorer 重启监视（2s 级轮询，与消息泵同线程零锁）
+        if last_shell_poll.elapsed() >= Duration::from_secs(2) {
+            last_shell_poll = Instant::now();
+            let cur = current_shell_pid();
+            match (last_shell_pid, cur) {
+                (Some(prev), Some(cur_pid)) if cur_pid != prev => {
+                    // shell 重启：全量重扫重标记（窗口属性可能丢失，幂等补标）
+                    println!(
+                        "watch: shell restart detected (task 20): explorer pid {prev} -> {cur_pid}; re-sweeping all windows"
+                    );
+                    ring.log(&format!("shell restart: explorer pid {prev} -> {cur_pid}"));
+                    WATCHER.with(|cell| {
+                        if let Some(state) = cell.borrow_mut().as_mut() {
+                            unsafe { state.resweep_all() };
+                        }
+                    });
+                    ring.log("resweep done");
+                    last_shell_pid = Some(cur_pid);
+                }
+                (None, Some(cur_pid)) => {
+                    // 首次见到 shell（如 CI 探针先启动 watch 后拉 explorer）：
+                    // 记为基线，不触发重扫
+                    last_shell_pid = Some(cur_pid);
+                }
+                _ => {}
             }
         }
     }
@@ -816,5 +951,29 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
             unsafe { state.final_scan_and_report() };
         }
     });
+
+    // 任务 20：优雅退出——健康记账收尾（移除 running 行、streak 清零）
+    // + 环形日志收尾。到不了这里的退出（崩溃/强杀/早退 Err）即异常退出，
+    // 下一轮 begin 据此累计熔断计数
+    health.end_clean();
+    ring.log("watch stop (graceful)");
     Ok(())
+}
+
+/// 任务 20：当前 shell（explorer）进程 PID。`GetShellWindow` 返回桌面
+/// 窗口（Progman，属 explorer 进程）；无 shell / 尚未就绪时 None。
+fn current_shell_pid() -> Option<u32> {
+    unsafe {
+        let hwnd = GetShellWindow();
+        if hwnd.0.is_null() {
+            return None;
+        }
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        if pid == 0 {
+            None
+        } else {
+            Some(pid)
+        }
+    }
 }

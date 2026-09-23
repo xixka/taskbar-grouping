@@ -61,6 +61,8 @@ fn spawn_watch(strategy: WatchStrategy, group_name: Option<String>) -> WatchSess
             group_name,
             // 任务 14：菜单模式——外部停止标志（优雅退出）
             stop: Some(stop_flag),
+            // 任务 20：环形日志走 CLI --log 开关；菜单模式默认关
+            ring_log: false,
         })
     });
     WatchSession {
