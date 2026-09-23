@@ -3,6 +3,9 @@ name = "tbg-lite"
 version = "0.1.0"
 edition = "2021"
 description = "Zero-injection Windows taskbar grouping controller (AUMID property-store route)"
+license = "MIT"          # 任务 21：AGENTS.md 建议采纳（未引用 mod 逻辑代码，GPL 不传染）
+repository = "https://github.com/xixka/taskbar-grouping"
+readme = "README.md"
 
 [dependencies]
 windows = { version = "0.58", features = [

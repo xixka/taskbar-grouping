@@ -2,6 +2,9 @@ name: ci
 
 on:
   push:
+    # 任务 21：tag 触发 release（v0.1.0+）；普通 push 走四 job 验证，
+    # tag push 额外产出发布物（zip + SHA256 + build-provenance attestation）
+    tags: ['v*']
   workflow_dispatch:
 
 jobs:
@@ -95,3 +98,52 @@ jobs:
           name: phase0b-acceptance-artifacts
           path: ci/out
           if-no-files-found: warn
+
+  # 任务 21（SEC-04）：发布物生成——tag push（v*）触发。四 job 全绿才轮到
+  # 本 job（needs 全部）。产物：tbg-lite-<tag>-x86_64-windows.zip +
+  # SHA256SUMS.txt + GitHub Release；build-provenance attestation 由
+  # actions/attest-build-provenance 出具（任务栏干预类工具易受
+  # SmartScreen/杀软误报，可验证来源即信誉）。actions 全部钉 SHA。
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, lockfile, runtime-smoke, phase0b-acceptance]
+    runs-on: windows-latest
+    permissions:
+      contents: write
+      id-token: write      # attestation 所需
+      attestations: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (audit SEC-02: pinned)
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (audit SEC-02: pinned)
+
+      - name: Build (release, locked)
+        run: cargo build --release --locked
+
+      - name: Package + SHA256
+        shell: powershell
+        run: |
+          $tag = "${env:GITHUB_REF_NAME}"
+          $zip = "tbg-lite-$tag-x86_64-windows.zip"
+          Compress-Archive -Path target\release\tbg-lite.exe -DestinationPath $zip -Force
+          $sha = (Get-FileHash -Algorithm SHA256 $zip).Hash
+          $size = (Get-Item $zip).Length
+          "$sha  $zip" | Set-Content SHA256SUMS.txt -Encoding ascii
+          "size_bytes=$size" | Set-Content size.txt -Encoding ascii
+          Write-Host "packaged $zip ($size bytes) sha256=$sha"
+
+      - name: Attest build provenance (SEC-04)
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2 (pinned)
+
+      - name: Create GitHub Release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${env:GITHUB_REF_NAME}"
+          $sha = (Get-Content SHA256SUMS.txt -Raw).Split(' ')[0]
+          $size = [int64]((Get-Content size.txt -Raw).Trim() -replace 'size_bytes=','')
+          $notes = "tbg-lite $tag`n`nArtifact: tbg-lite-$tag-x86_64-windows.zip ($size bytes)`nSHA256: $sha`n`nVerification: build provenance attested (see release attestations); verify locally with 'gh attestation verify <zip> --repo $env:GITHUB_REPOSITORY'.`n`nMSRV: stable toolchain. Built with cargo build --release --locked from tag $tag."
+          gh release create $tag --title "tbg-lite $tag" --notes $notes tbg-lite-$tag-x86_64-windows.zip SHA256SUMS.txt

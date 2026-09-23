@@ -150,14 +150,17 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 - `.github/workflows/ci.yml` —— 唯一 CI workflow：`build`（release 编译门禁）
   + `lockfile`（任务 22：Cargo.lock 生成/新鲜度门禁）+ `runtime-smoke`
   （任务 9：运行时冒烟）+ `phase0b-acceptance`（任务 10：Phase 0b 验收）
-  四个 job
-- `docs/plan.md` —— 实施计划 v2（§0 决策 / §3 任务清单；提交一一对应任务号）
+  四个 job + `release`（任务 21：tag v* 触发，needs 四 job，打包 zip +
+  SHA256SUMS + attest-build-provenance + GitHub Release）
+- `docs/plan.md` —— 实施计划 v2（§0 决策 / §3 任务清单，已全部完成；提交一一对应任务号）
 - `docs/coverage-matrix.md` —— 多应用覆盖矩阵记录表（任务 15 已回填关闭：
   维护者 2026-09-23 指令"CI 测试等同真机测试"，CI 行即真机行；§8 裁决
   B+ 持续为主——用户应用覆盖 7/7=100%、竞态 0%；唯一 0 分行 = shell 自管
   Explorer 文件夹窗口已知限制，严格全行口径 87.5% 已透明记录）
 - `docs/phase0b-acceptance.md` —— Phase 0b 验收报告（CI 量化证据与真机待验清单）
-- `README.md` —— 对外项目定位
+- `README.md` —— 对外项目定位（任务 21 重写：全命令、Windhawk 共存注意、已知限制、证据链接）
+- `LICENSE` —— MIT（任务 21）
+- `BENCHMARK.md` —— 实测基准（任务 21：内存/压测/覆盖/加固；体积由 Release 自动回填）
 
 ## 完成的定义（DoD）
 
@@ -200,6 +203,7 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 
 - `cargo fmt` / `cargo clippy` 是否纳入 CI 门禁（需一次性格式化任务；审计 P2-14）
 - `cargo build`（debug）未验证
-- 发布流程未定（SEC-04：发布时附 SHA256 + Release attestation，任务 21）
-- LICENSE 未定（建议默认：MIT）
-- 配置文件路径未定（建议默认：exe 同目录 `config.toml`；若引入见 plan v2 §6-2）
+- 已定（任务 21，2026-09-23）：LICENSE = MIT（Cargo.toml + LICENSE 文件）；
+  发布流程 = CI `release` job（tag v* 触发，zip + SHA256SUMS +
+  build-provenance attestation + gh release create，actions 钉 SHA）；
+  配置文件维持不需要（plan v2 §6-2 决议）

@@ -153,10 +153,20 @@
       新增 Phase X（18 断言：环形日志 4、重启检测/重扫/存活/钩子存续 8、
       熔断三轮强杀→第四次注销自启+第五次不再熔断 6），断言 86→104；
       新增 8 项单元测试（环形截半×3 + 熔断记账×5），单测 39→47。
-- [ ] **任务 21**：发布准备——README（与 Windhawk 共存注意）、LICENSE 定稿、
+- [x] **任务 21**：发布准备——README（与 Windhawk 共存注意）、LICENSE 定稿、
       `BENCHMARK.md`（体积/内存实测回填，对照 plan v1 §6 预算）、tag + GitHub
       Release 流程。SEC-04 注记：发布物附 SHA256 + GitHub Release
       attestation（任务栏干预类工具易受 SmartScreen/杀软误报）。
+      完成：LICENSE = MIT（AGENTS.md 建议采纳；零注入路线未引用 Windhawk
+      mod 逻辑代码，GPL 不传染）；README 重写（全命令、菜单、自启、pin/
+      unpin、任务 20 加固、Windhawk 共存两注意：同功能 mod 二选一 +
+      Explorer 回写已知限制、已知限制四条、104 断言 CI 说明）；`
+      BENCHMARK.md`（内存 9.15MB/1.48MB、50 窗双线路 0/0/0、UIA、多应用
+      7/7、任务 20 加固实测，体积由 Release 工作流自动回填）；CI 增 `
+      release` job（tag v* 触发，needs 四 job：打包 zip + SHA256SUMS +
+      attest-build-provenance v4.2.2 钉 SHA + gh release create 自动发布，
+      permissions 含 id-token/attestations）；Cargo.toml +license(MIT)/
+      repository/readme（lockfile 中性字段，不触发新鲜度门禁）。
 
 ### Phase R — 审计修复（2026-09-22 深度代码审计，BUG-01..15 / SEC-01..05）
 
@@ -217,10 +227,12 @@ DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任
 - 启动 A 前须重新立项评审：GPL-3.0 传染、杀软误报、Windows 更新维护成本三项
   （v1 §3.3）。
 
-## §6 开放问题
+## §6 开放问题（2026-09-23 任务 21 收尾决议）
 
-1. LICENSE 选型（AGENTS.md 建议 MIT；若未来引用 mod 逻辑描述则需重新评估 GPL 边界）。
-2. 配置文件是否需要（当前全 CLI 参数 + 无排除列表决策；若真机矩阵暴露普遍回写类
-   应用，再评估"跳过清单"是否解禁）。
-3. 任务 20 宿主常驻 vs 退出模式的默认值（对应 v1 §9-3，倾向常驻以支持 explorer
-   重启重应用）。
+1. **已决**：LICENSE = MIT（任务 21；零注入路线未引用 mod 逻辑代码，GPL 不
+   传染；若未来引用 mod 逻辑描述再重评）。
+2. **维持不需要**：配置文件（全 CLI 参数 + 无排除列表决策不变；覆盖矩阵
+   回填后唯一回写行为 shell 自管 Explorer 文件夹窗口，属路线边界非配置
+   可解——plan v2 §2 已知限制）。
+3. **已决**：宿主常驻（任务 20 落地：常驻 + explorer 重启重扫 + 熔断；
+   对应 v1 §9-3 的倾向性判断成为实现事实）。
