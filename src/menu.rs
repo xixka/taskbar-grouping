@@ -780,9 +780,12 @@ pub(crate) fn run() -> ExitCode {
                     // 任务 31：k = 退出保活（分离式后台重启 watch）。
                     // 解析先于 stop（答案与 watch 状态无关，先读 stdin）；
                     // 重启必须在 stop_and_join 之后（互斥体释放，见
-                    // spawn_detached_watch 注释）
+                    // spawn_detached_watch 注释）。stop_and_join 消耗 s，
+                    // 重启参数先拷出（WatchStrategy 为 Copy）
                     let keep_background = is_keep(&answer);
                     let restore_first = !keep_background && is_yes(&answer);
+                    let bg_strategy = s.strategy;
+                    let bg_group = s.group_name.clone();
                     // 先停（互斥体随线程 Drop 释放），后启
                     match s.stop_and_join() {
                         Ok(()) => println!("{}", loc.watch_stopped_stats()),
@@ -797,7 +800,7 @@ pub(crate) fn run() -> ExitCode {
                             }
                         }
                     } else if keep_background {
-                        match spawn_detached_watch(s.strategy, s.group_name.as_deref()) {
+                        match spawn_detached_watch(bg_strategy, bg_group.as_deref()) {
                             Ok(pid) => println!("{}", loc.background_started(pid)),
                             Err(e) => println!("{}", loc.background_failed(&e)),
                         }
