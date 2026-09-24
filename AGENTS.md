@@ -108,7 +108,9 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   用户固定目录）/ `unpin`（任务 17 反向删除，AUMID 验证防误删、幂等）；
   panic hook 管道断裂优雅退出；用法错误退出码 2
 - `src/menu.rs` —— 交互菜单（任务 14）：watch 后台线程化（停止标志优雅
-  退出，取代 Ctrl+C）、复用 cmd_inspect/cmd_restore、stdin EOF 优雅退出
+  退出，取代 Ctrl+C）、复用 cmd_inspect/cmd_restore、stdin EOF 优雅退出；
+  任务 29：文案双语（en/zh，GetUserDefaultUILanguage 自动检测 + L 键
+  切换，仅菜单层——watch/inspect/restore 技术输出保持英文）
 - `src/appid.rs` —— AUMID 读写核心（属性存储 API）；线路一/线路二标记
   （`~TBG~w` 后缀 / `TBG.Group.` 共享前缀）
 - `src/winevent.rs` —— `watch` 实现：SetWinEventHook 事件驱动 + 双线路改写

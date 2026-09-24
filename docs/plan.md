@@ -223,6 +223,15 @@
       shell 窗口跳过、映射表已有条目只补写共享值不重复落盘、读失败
       静默（DESTROY 簿记负责清理）；新增统计 `reasserted`（CI 断言为
       正则匹配既有行，新增行不破坏现有门禁）。
+- [x] **任务 29**（维护者 2026-09-24 真机反馈：菜单需要中英文）：
+      交互菜单文案双语（en/zh）。语言 = `GetUserDefaultUILanguage` 主语言
+      ID 0x04（中文，含 zh-CN/zh-TW/zh-HK）自动检测，默认英文；菜单内
+      `L` 键随时切换（会话级，不落盘——§6-2 配置维持不需要）。范围：
+      仅菜单层字符串；watch / inspect / restore 技术输出保持英文（CI
+      断言与文档口径）。兼容性：en-US CI Runner 走 EN 分支，Phase M
+      菜单流与 `interactive menu` 断言不变；`L` 键 CI 脚本不发送，stdin
+      序列对齐不被扰动（ZH 横幅保留英文子串 `interactive menu` 双保险）。
+      Cargo feature +`Win32_Globalization`（feature 增改不影响 lockfile）。
 
 ### Phase R 验收结论（2026-09-22）
 

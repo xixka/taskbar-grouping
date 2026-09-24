@@ -22,6 +22,7 @@ windows = { version = "0.58", features = [
     "Win32_System_Threading",        # CreateMutexW 单实例互斥（任务 22，审计 BUG-02）
     "Win32_Security",                # SECURITY_ATTRIBUTES（CreateMutexW 签名引用，任务 22）
     "Win32_System_Registry",         # HKCU Run 开机自启（任务 19：RegCreateKeyExW 等）
+    "Win32_Globalization",           # GetUserDefaultUILanguage 菜单语言自动检测（任务 29）
 ] }
 
 # 体积导向 release 配置（对应 docs/plan.md §6 预算：单文件 < 0.5 MB 目标）
