@@ -239,6 +239,103 @@ impl L10n {
         }
     }
 
+    fn item6(&self) -> &'static str {
+        match self.lang {
+            Lang::En => "  [6] injection route info   (route A status + Windhawk coexistence guide)",
+            Lang::Zh => "  [6] 注入路线说明（路线 A 现状 + Windhawk 协同指引）",
+        }
+    }
+
+    /// 任务 30：注入路线菜单入口（信息 + 协同引导，**不含任何注入代码**——
+    /// plan v2 §5 红线：路线 A 备用不实现）。注入路线的实操载体是
+    /// Windhawk（成熟注入平台）+ 其 taskbar-grouping mod：mod 在 explorer
+    /// 内部挂钩任务栏自身分组逻辑，天然覆盖 shell 自管回写的 Explorer
+    /// 文件夹窗口。给出本机 Windhawk 安装检测 + 冲突规则（README
+    /// Coexistence 同口径）+ 操作步骤。
+    fn injection_route_info(&self, watch_running: bool) -> String {
+        // Windhawk 安装检测（常见两处安装位置；存在 windhawk.exe 即视为
+        // 已安装——纯文件系统探测，无注入、无新依赖）
+        let mut wh_path = None;
+        for base in ["ProgramFiles", "LOCALAPPDATA"] {
+            if let Some(dir) = std::env::var_os(base) {
+                let cand = std::path::Path::new(&dir)
+                    .join("Windhawk")
+                    .join("windhawk.exe");
+                if cand.is_file() {
+                    wh_path = Some(cand);
+                    break;
+                }
+                // per-user 安装布局：LOCALAPPDATA\Programs\Windhawk
+                let cand_user = std::path::Path::new(&dir)
+                    .join("Programs")
+                    .join("Windhawk")
+                    .join("windhawk.exe");
+                if cand_user.is_file() {
+                    wh_path = Some(cand_user);
+                    break;
+                }
+            }
+        }
+        let wh_line = match &wh_path {
+            Some(p) => format!("{} ({})", self.wh_found(), p.display()),
+            None => self.wh_not_found().to_string(),
+        };
+        let mut out = match self.lang {
+            Lang::En => format!(
+                concat!(
+                    "menu: injection route (route A) — info\n",
+                    "  tbg-lite itself never injects (plan v2 §5: route A stays the archived\n",
+                    "  backup; injection = symbol hooks inside explorer with per-build\n",
+                    "  maintenance, AV-false-positive and GPL risks). The practical injection\n",
+                    "  route today is Windhawk (https://windhawk.net) + its taskbar-grouping\n",
+                    "  mod, which hooks the taskbar itself — this also covers Explorer\n",
+                    "  folder windows natively (the non-injection route can only re-assert,\n",
+                    "  see task 28).\n",
+                    "  Windhawk: {wh_line}\n"
+                ),
+                wh_line = wh_line
+            ),
+            Lang::Zh => format!(
+                concat!(
+                    "menu：注入路线（路线 A）——说明\n",
+                    "  tbg-lite 本体不做注入（plan v2 §5：路线 A 为存档备用——注入需在\n",
+                    "  explorer 内挂符号钩子，逐版本维护、杀软误报与 GPL 风险）。当前\n",
+                    "  可实操的注入路线是 Windhawk（https://windhawk.net）+ 其\n",
+                    "  taskbar-grouping mod：mod 直接在任务栏内部挂钩分组逻辑，天然\n",
+                    "  覆盖 shell 自管回写的 Explorer 文件夹窗口（非注入路线只能\n",
+                    "  检测+补写，见任务 28）。\n",
+                    "  Windhawk：{wh_line}\n"
+                ),
+                wh_line = wh_line
+            ),
+        };
+        if watch_running {
+            out.push_str(match self.lang {
+                Lang::En => "  ! the tbg-lite watch is RUNNING — stop it first ([3]) and run [4]\n     restore, or both tools will fight over the same windows' AUMIDs.\n",
+                Lang::Zh => "  ！tbg-lite watch 正在运行——请先 [3] 停止并 [4] 还原，否则两个\n     工具会争抢同一批窗口的 AUMID。\n",
+            });
+        }
+        out.push_str(match self.lang {
+            Lang::En => "  steps: 1) install Windhawk  2) Explore mods -> search \"taskbar group\"\n  3) install & enable the mod  4) keep tbg-lite stopped (or uninstall its\n  autostart). Note: Win11 23H2+ also has a native \"never combine\" taskbar\n  setting (Settings > Personalization > Taskbar) for plain ungrouping.",
+            Lang::Zh => "  步骤：1) 安装 Windhawk  2) Explore mods 搜索 \"taskbar group\"\n  3) 安装并启用 mod  4) 保持 tbg-lite 停止（或注销其自启）。注：Win11\n  23H2+ 对纯取消分组还有原生设置（设置 > 个性化 > 任务栏 > 永不合并）。",
+        });
+        out
+    }
+
+    fn wh_found(&self) -> &'static str {
+        match self.lang {
+            Lang::En => "installed",
+            Lang::Zh => "已安装",
+        }
+    }
+
+    fn wh_not_found(&self) -> &'static str {
+        match self.lang {
+            Lang::En => "not found (https://windhawk.net)",
+            Lang::Zh => "未找到（https://windhawk.net）",
+        }
+    }
+
     fn item0(&self) -> &'static str {
         match self.lang {
             Lang::En => {
@@ -392,8 +489,8 @@ impl L10n {
 
     fn unknown_option(&self, other: &str) -> String {
         match self.lang {
-            Lang::En => format!("menu: unknown option {other:?} (valid: 0-5, L)"),
-            Lang::Zh => format!("menu：未知选项 {other:?}（可用：0-5、L）"),
+            Lang::En => format!("menu: unknown option {other:?} (valid: 0-6, L)"),
+            Lang::Zh => format!("menu：未知选项 {other:?}（可用：0-6、L）"),
         }
     }
 
@@ -438,6 +535,7 @@ fn print_menu(loc: &L10n, running: Option<&WatchSession>) {
     println!("{}", loc.item3());
     println!("{}", loc.item4());
     println!("{}", loc.item5());
+    println!("{}", loc.item6());
     println!("{}", loc.item0());
     println!("{}", loc.lang_hint());
 }
@@ -547,6 +645,11 @@ pub(crate) fn run() -> ExitCode {
                 if let Err(e) = crate::cmd_inspect(&[]) {
                     println!("{}", loc.inspect_failed(&e));
                 }
+            }
+            "6" => {
+                // 任务 30：注入路线入口——信息 + 协同引导（无注入代码，
+                // plan v2 §5 红线不破；实操载体 = Windhawk）
+                println!("{}", loc.injection_route_info(session.is_some()));
             }
             "0" => {
                 if let Some(s) = session.take() {

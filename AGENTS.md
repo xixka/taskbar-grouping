@@ -110,7 +110,9 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 - `src/menu.rs` —— 交互菜单（任务 14）：watch 后台线程化（停止标志优雅
   退出，取代 Ctrl+C）、复用 cmd_inspect/cmd_restore、stdin EOF 优雅退出；
   任务 29：文案双语（en/zh，GetUserDefaultUILanguage 自动检测 + L 键
-  切换，仅菜单层——watch/inspect/restore 技术输出保持英文）
+  切换，仅菜单层——watch/inspect/restore 技术输出保持英文）；任务 30：
+  `[6]` 注入路线入口（信息 + Windhawk 协同引导，零注入代码，§5 红线
+  不破）
 - `src/appid.rs` —— AUMID 读写核心（属性存储 API）；线路一/线路二标记
   （`~TBG~w` 后缀 / `TBG.Group.` 共享前缀）
 - `src/winevent.rs` —— `watch` 实现：SetWinEventHook 事件驱动 + 双线路改写

@@ -232,6 +232,15 @@
       菜单流与 `interactive menu` 断言不变；`L` 键 CI 脚本不发送，stdin
       序列对齐不被扰动（ZH 横幅保留英文子串 `interactive menu` 双保险）。
       Cargo feature +`Win32_Globalization`（feature 增改不影响 lockfile）。
+- [x] **任务 30**（维护者 2026-09-24 真机反馈：菜单无注入选择项）：
+      菜单 `[6]` 注入路线入口——**信息 + 协同引导，零注入代码**（§5
+      红线不破：路线 A 仍为存档备用，不实现）。内容：路线 A 现状说明
+      （符号钩子逐版本维护 / 杀软误报 / GPL 风险）、本机 Windhawk 安装
+      检测（ProgramFiles 与 LOCALAPPDATA 两处常见布局，纯文件系统探测
+      无新依赖）、与 tbg 的冲突规则（watch 运行中先 [3] 停止 + [4]
+      还原，README Coexistence 同口径）、操作步骤（Windhawk → Explore
+      mods 搜 taskbar group）与 Win11 23H2+ 原生"永不合并"备注。CI
+      兼容：`6` 键 Phase M 脚本不发送，stdin 序列对齐不变。
 
 ### Phase R 验收结论（2026-09-22）
 
