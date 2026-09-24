@@ -114,7 +114,10 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 - `src/winevent.rs` —— `watch` 实现：SetWinEventHook 事件驱动 + 双线路改写
   （apply_ungroup / apply_group）+ 启动扫存量（任务 13：开启即全量改写，
   幂等重入/双线路互斥）+ explorer 重启监视与重扫（任务 20：GetShellWindow
-  PID 2s 轮询、常驻模式 wait 2s、resweep_* 统计）+ 熔断挂载 + 统计报告
+  PID 2s 轮询、常驻模式 wait 2s、resweep_* 统计）+ 回写对抗（任务 28：
+  reassert——NAMECHANGE 重验 + 5s 周期复核，标记丢失即按线路补写，
+  reasserted 统计；Explorer 回写只能"检测+补写"，无法阻止属主改写）
+  + 熔断挂载 + 统计报告
 - `src/restoremap.rs` —— 线路二还原映射表（`%LOCALAPPDATA%\tbg-lite\
   tbg-restore.tsv`，任务 22 起；原子写 tmp+fsync+rename、表头 v1、旧表
   自动迁移；防 HWND 复用校验）

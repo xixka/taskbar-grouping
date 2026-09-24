@@ -211,6 +211,18 @@
       同构（zip + SHA256SUMS + build-provenance attestation，SEC-04
       同口径）；④ prerelease 不占 latest 位，v* 稳定版仍为最新；
       ⑤ `fail_on_unmatched_files` 门禁防空资产发布。
+- [x] **任务 28**（维护者 2026-09-24 真机反馈：Explorer 文件夹窗口
+      回写）：回写对抗（reassert）——已处理窗口标记丢失（应用 / shell
+      重落自家 AUMID，典型：Explorer 文件夹窗口导航）时自动按当前线路
+      补写。双入口：NAMECHANGE 重验（导航 / 标题变化即触发，winevent
+      回写检测口）+ 5s 周期复核（兜底无标题变化的静默回写）。调研结论
+      （2026-09-24 联网检索）：非注入路线**无法阻止**属主进程改写自家
+      窗口 AUMID（MSDN《AppUserModelIDs》：AUMID 由窗口属主设置，
+      `SHGetPropertyStoreForWindow` 仅提供外部读写），只能"检测 + 补写"；
+      代价为补写瞬间按钮可能一次跳动。安全边界：另一线路标记不误叠、
+      shell 窗口跳过、映射表已有条目只补写共享值不重复落盘、读失败
+      静默（DESTROY 簿记负责清理）；新增统计 `reasserted`（CI 断言为
+      正则匹配既有行，新增行不破坏现有门禁）。
 
 ### Phase R 验收结论（2026-09-22）
 

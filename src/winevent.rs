@@ -107,6 +107,10 @@ struct Stats {
     dry_run_hits: u64,
     truncated: u64,
     write_fail: u64,
+    /// 任务 28：回写对抗（reassert）——已处理窗口的标记被应用 / shell
+    /// 改写回去（典型：Explorer 文件夹窗口导航后 shell 重落自家 AUMID）
+    /// 后，本会话自动补写的次数（NAMECHANGE 重验 + 5s 周期复核两个入口）。
+    reasserted: u64,
     skipped_dupe: u64,
     skipped_not_app_window: u64,
     skipped_shell: u64,
@@ -306,12 +310,14 @@ impl WatcherState {
         };
         if self.handled.contains(&key) {
             // 已处理过（CREATE 处理后紧随的 SHOW 等）。NAMECHANGE 例外：
-            // 已处理窗口的标题变化（时钟/进度条类高频）无评估意义，
-            // 静默跳过不计 dupe，避免统计噪声淹没真实重复计数
-            // （任务 24，审计 BUG-13 口径）。
-            if event != EVENT_OBJECT_NAMECHANGE {
-                self.stats.skipped_dupe += 1;
+            // 任务 24 口径下它是标题后置窗口的重评估入口；任务 28 起对
+            // 已处理窗口承担第二职责——回写检测入口（reassert：标记
+            // 丢失当场补写，标记完好零动作零输出）。
+            if event == EVENT_OBJECT_NAMECHANGE {
+                unsafe { self.reassert(hwnd, key) };
+                return;
             }
+            self.stats.skipped_dupe += 1;
             return;
         }
         // 任务 13：存量窗口不再整体跳过——启动扫未改写成功的存量窗口
@@ -551,6 +557,124 @@ impl WatcherState {
         );
     }
 
+    /// 任务 28：回写对抗（reassert）——对已处理窗口核对标记是否仍在；
+    /// 丢失（应用 / shell 改写了自家窗口的 AUMID，典型：Explorer 文件夹
+    /// 窗口导航后 shell 重落原生值）则按当前线路立即补写。
+    ///
+    /// 背景调研结论（2026-09-24）：非注入路线**无法阻止**属主进程改写
+    /// 自家窗口属性（MSDN《AppUserModelIDs》：AUMID 本就由窗口属主设置，
+    /// `SHGetPropertyStoreForWindow` 只提供外部读写）；可行的对抗只有
+    /// "检测 + 补写"：NAMECHANGE（导航/标题变化即触发）+ 5s 周期复核
+    /// （`reverify_handled`）双入口。代价：补写瞬间按钮可能有一次
+    /// 分组/独立跳动（闪烁）。
+    ///
+    /// 安全边界与 consider 同口径：另一线路标记 / 标记形态异常值一律
+    /// 不补（宁可漏标，不可误叠，任务 23 审计 BUG-05 原则）；shell
+    /// 窗口（桌面/任务栏本体，consider 阶段就只记簿不改写）跳过；
+    /// 读取失败（窗口已销毁但 DESTROY 未及清理）静默返回，簿记交
+    /// DESTROY。dry-run 从未写入，无补写对象。
+    unsafe fn reassert(&mut self, hwnd: HWND, key: usize) {
+        if self.dry_run {
+            return;
+        }
+        if winutil::is_shell_window(hwnd) {
+            return;
+        }
+        let aumid = match appid::get_aumid(hwnd) {
+            Ok(a) => a,
+            Err(_) => return,
+        };
+        let (target, truncated) = match self.strategy {
+            WatchStrategy::Ungroup => {
+                if appid::strip_suffix(&aumid, hwnd).is_some() {
+                    return; // 标记完好
+                }
+                // 保守跳过：标记形态异常 / 另一线路标记（防叠加）
+                if aumid.contains(appid::SUFFIX_MARKER) || appid::is_group_aumid(&aumid) {
+                    return;
+                }
+                let suffixed = appid::suffixed_aumid(&aumid, hwnd);
+                (suffixed.value, suffixed.truncated)
+            }
+            WatchStrategy::Group => {
+                if appid::is_group_aumid(&aumid) {
+                    return; // 标记完好
+                }
+                if aumid.contains(appid::SUFFIX_MARKER) {
+                    return; // 另一线路标记：保守跳过
+                }
+                // 已有还原映射条目（本会话或前会话线路二记录）→ 只补写
+                // 共享值，不动映射表：原值已录，避免 Explorer 每次导航都
+                // 触发一次落盘
+                if !self
+                    .map
+                    .as_ref()
+                    .map_or(false, |m| m.peek(key, &self.group_value).is_some())
+                {
+                    // 无条目（跨会话残留 / 竞态遗漏）：按首次改写补录原值，
+                    // 落盘失败则不写（还原能力优先于分组生效，apply_group 同则）
+                    let Some(map) = self.map.as_mut() else {
+                        self.stats.write_fail += 1;
+                        eprintln!(
+                            "{} REASSERT {} group reassert FAILED: no restore map loaded",
+                            self.ts(),
+                            fmt_window(hwnd)
+                        );
+                        return;
+                    };
+                    map.record(key, &self.group_value, &aumid);
+                    if let Err(e) = map.save() {
+                        map.remove(key);
+                        self.stats.write_fail += 1;
+                        eprintln!(
+                            "{} REASSERT {} map save FAILED: {e} (AUMID left untouched)",
+                            self.ts(),
+                            fmt_window(hwnd)
+                        );
+                        return;
+                    }
+                }
+                (self.group_value.clone(), false)
+            }
+        };
+        if truncated {
+            self.stats.truncated += 1;
+        }
+        let t0 = Instant::now();
+        match appid::set_aumid(hwnd, &target) {
+            Ok(()) => {
+                self.stats.reasserted += 1;
+                println!(
+                    "{} REASSERT {} aumid={:?} -> {:?} (marker lost, re-applied, write {:.1}ms)",
+                    self.ts(),
+                    fmt_window(hwnd),
+                    winutil::shown_aumid(&aumid),
+                    target,
+                    t0.elapsed().as_secs_f64() * 1000.0
+                );
+            }
+            Err(e) => {
+                self.stats.write_fail += 1;
+                eprintln!(
+                    "{} REASSERT {} write FAILED: {e}",
+                    self.ts(),
+                    fmt_window(hwnd)
+                );
+            }
+        }
+    }
+
+    /// 任务 28：5s 周期复核全部已处理窗口——兜底无标题变化的静默回写
+    /// （NAMECHANGE 入口覆盖导航/标题变化场景，此入口覆盖其余）。快照
+    /// 键集后逐个 reassert；读失败即跳过（DESTROY 簿记负责清理）。
+    unsafe fn reverify_handled(&mut self) {
+        let keys: Vec<usize> = self.handled.iter().copied().collect();
+        for key in keys {
+            let hwnd = HWND(key as *mut _);
+            self.reassert(hwnd, key);
+        }
+    }
+
     /// 退出时的全量复扫与统计输出：
     /// - 漏检 = 新出现的应用窗口在会话结束时仍无本线路标记；
     /// - 回退 = 本会话改写过、但标记已消失（应用回写了自身 AUMID 的证据）。
@@ -602,6 +726,10 @@ impl WatcherState {
             self.stats.rewritten, self.stats.truncated
         );
         println!("write fails: {}", self.stats.write_fail);
+        println!(
+            "reasserted (marker lost & re-applied, task 28): {}",
+            self.stats.reasserted
+        );
 
         let mut missed: Vec<String> = Vec::new();
         let mut reverted: Vec<String> = Vec::new();
@@ -809,6 +937,7 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
         );
     }
     println!("note: DESTROY hook is bookkeeping only (tracked-window cleanup)");
+    println!("reassert : markers lost to app/shell rewrites are re-applied (task 28: NAMECHANGE check + 5s periodic verify)");
     if opts.duration.is_zero() {
         if opts.stop.is_some() {
             // 任务 14：菜单模式——由停止标志优雅退出（无需 Ctrl+C）
@@ -863,6 +992,8 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     // （重启中）不更新基线，等新 shell 出现。
     let mut last_shell_pid = current_shell_pid();
     let mut last_shell_poll = Instant::now();
+    // 任务 28：回写对抗的周期复核节拍（5s；NAMECHANGE 入口之外的兜底）
+    let mut last_reassert_poll = Instant::now();
     loop {
         // 任务 14：菜单模式的停止标志——置位即优雅退出（摘钩 + 终扫 +
         // 统计，见循环后的公共退出路径）。启动扫存量在进泵前无条件跑完，
@@ -930,6 +1061,18 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
                 }
                 _ => {}
             }
+        }
+        // 任务 28：回写对抗——5s 周期复核已处理窗口的标记。NAMECHANGE
+        // 入口覆盖导航/标题变化场景（Explorer 回写的主通道）；此入口兜底
+        // 无标题变化的静默回写（如部分浏览器后台周期性重落 AUMID）。
+        // 与 shell 轮询同线程零锁；读 AUMID 为廉价 COM 属性读。
+        if last_reassert_poll.elapsed() >= Duration::from_secs(5) {
+            last_reassert_poll = Instant::now();
+            WATCHER.with(|cell| {
+                if let Some(state) = cell.borrow_mut().as_mut() {
+                    unsafe { state.reverify_handled() };
+                }
+            });
         }
     }
 

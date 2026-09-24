@@ -96,9 +96,14 @@ mods. Two things to keep in mind:
 
 ## Known limitations (route B+)
 
-- Explorer folder windows revert their AUMID (shell-managed).
+- Explorer folder windows revert their AUMID (shell-managed). Since task 28
+  the watcher **re-applies the marker automatically** (NAMECHANGE check +
+  5 s periodic verify); expect a brief button jump each time the shell wins
+  a round. Non-injection cannot prevent the shell from rewriting its own
+  windows (per Microsoft's AppUserModelIDs docs) — it can only fight back.
 - Chromium-family browsers self-manage their AUMID; short-horizon rewrites
-  hold, long-horizon behavior is hardware/browser-update dependent.
+  hold, long-horizon behavior is hardware/browser-update dependent (the
+  re-assert pass catches most of these too).
 - No icon/jumplist "translation layer" (that is injection-route capability);
   suffix-marked windows may show generic jump lists.
 - New-window race: a button may briefly appear in its native group before the
