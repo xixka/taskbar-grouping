@@ -241,6 +241,18 @@
       还原，README Coexistence 同口径）、操作步骤（Windhawk → Explore
       mods 搜 taskbar group）与 Win11 23H2+ 原生"永不合并"备注。CI
       兼容：`6` 键 Phase M 脚本不发送，stdin 序列对齐不变。
+- [x] **任务 31**（维护者 2026-09-24 真机反馈：菜单退出后效果丢失）：
+      退出保活——`[0]` 退出确认新增 `k` 选项：先优雅停止本进程 watch
+      （互斥体随线程 Drop 释放），再以 `std::process::Command`
+      （CREATE_NO_WINDOW + CREATE_NEW_PROCESS_GROUP，分离不随父进程
+      退出）重启 `watch --duration 0` 子进程接续监听——新窗口继续被
+      标记、Explorer 回写继续被任务 28 补写。顺序红线：必须先停后启
+      （group 线路 `Local\tbg-lite.map` 互斥体，审计 BUG-02）。stdio
+      显式导向 `%LOCALAPPDATA%\tbg-lite\tbg-background.log`（append，
+      打不开回退 NUL）——CREATE_NO_WINDOW 隐式 stdout 为无效句柄，
+      println! 写失败会 panic 杀死后台进程。y/n 原语义不变（CI M1 发
+      `n` 走原路径）；`k` 键 CI 不发送，stdin 对齐不变。开机延续仍走
+      `install`（任务 19），本项只解决"退出即失效"。
 
 ### Phase R 验收结论（2026-09-22）
 

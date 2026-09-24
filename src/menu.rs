@@ -42,6 +42,9 @@ struct WatchSession {
     handle: JoinHandle<Result<(), String>>,
     /// 菜单展示用的线路标签。
     label: &'static str,
+    /// 任务 31：退出保活——分离重启子进程所需的 CLI 同构参数。
+    strategy: WatchStrategy,
+    group_name: Option<String>,
 }
 
 impl WatchSession {
@@ -60,13 +63,14 @@ impl WatchSession {
 fn spawn_watch(strategy: WatchStrategy, group_name: Option<String>) -> WatchSession {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_flag = stop.clone();
+    let group_for_thread = group_name.clone();
     let handle = std::thread::spawn(move || {
         winevent::run(WatchOptions {
             duration: Duration::ZERO,
             dry_run: false,
             verbose: false,
             strategy,
-            group_name,
+            group_name: group_for_thread,
             // 任务 14：菜单模式——外部停止标志（优雅退出）
             stop: Some(stop_flag),
             // 任务 20：环形日志走 CLI --log 开关；菜单模式默认关
@@ -80,7 +84,86 @@ fn spawn_watch(strategy: WatchStrategy, group_name: Option<String>) -> WatchSess
             WatchStrategy::Ungroup => "ungroup (line 1: disable grouping on the taskbar)",
             WatchStrategy::Group => "group (line 2: shared AUMID)",
         },
+        strategy,
+        group_name,
     }
+}
+
+/// 任务 31：`[k]` 退出保活确认：k/keep（大小写不敏感、容忍首尾空白）
+/// 为真——退出菜单但把 watch 分离式重启到后台（菜单进程退出后新窗口
+/// 继续被标记、Explorer 回写继续被任务 28 补写）。
+fn is_keep(line: &str) -> bool {
+    matches!(
+        line.trim().to_ascii_lowercase().as_str(),
+        "k" | "keep"
+    )
+}
+
+/// 任务 31：分离式后台重启 watch 子进程（`[0]` 退出选 `k`）。
+///
+/// **必须在 `stop_and_join` 之后调用**：`Local\tbg-lite.map` 互斥体随
+/// watch 线程结束 Drop 释放（group 线路），先停后启保证子进程拿得到
+/// 互斥体（审计 BUG-02 单实例红线）。
+///
+/// 子进程形态 = 纯 CLI `watch --duration 0`（常驻直至被杀；参数与菜单
+/// 线路同构）。无控制台窗口（CREATE_NO_WINDOW + 独立进程组，不受父
+/// 进程退出/Ctrl+C 影响）；stdout/stderr 追加到
+/// `%LOCALAPPDATA%\tbg-lite\tbg-background.log`——CREATE_NO_WINDOW 的
+/// 隐式 stdout 是无效句柄，`println!` 写失败会 panic 杀死后台进程，必须
+/// 显式给出口（打不开则回退 NUL 设备，丢弃日志但进程存活）。
+fn spawn_detached_watch(
+    strategy: WatchStrategy,
+    group_name: Option<&str>,
+) -> Result<u32, String> {
+    use std::os::windows::process::CommandExt;
+
+    let exe =
+        std::env::current_exe().map_err(|e| format!("cannot resolve current exe path: {e}"))?;
+    let mut cmd = std::process::Command::new(exe);
+    cmd.arg("watch")
+        .arg("--strategy")
+        .arg(match strategy {
+            WatchStrategy::Ungroup => "ungroup",
+            WatchStrategy::Group => "group",
+        })
+        // CLI 默认 duration=60s；后台保活必须显式常驻
+        .arg("--duration")
+        .arg("0");
+    if let Some(name) = group_name {
+        cmd.arg("--group").arg(name);
+    }
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+    cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
+    // 显式 stdio：日志文件优先，回退 NUL（见函数注释）
+    if let Some(log) = background_log() {
+        let log_err = log
+            .try_clone()
+            .map_err(|e| format!("cannot duplicate background log handle: {e}"))?;
+        cmd.stdout(std::process::Stdio::from(log));
+        cmd.stderr(std::process::Stdio::from(log_err));
+    } else {
+        cmd.stdout(std::process::Stdio::null());
+        cmd.stderr(std::process::Stdio::null());
+    }
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("background watch spawn failed: {e}"))?;
+    // 分离：不持有句柄、不等待（Windows 下 drop Child 不杀进程）；
+    // 返回 pid 供提示。之后用 `tbg-lite` 菜单 [3]/任务管理器结束。
+    Ok(child.id())
+}
+
+/// 后台保活日志文件（append）。目录沿用映射表数据目录
+/// `%LOCALAPPDATA%\tbg-lite`；任何失败返回 None（调用方回退 NUL）。
+fn background_log() -> Option<std::fs::File> {
+    let dir = crate::restoremap::data_dir().ok()?;
+    std::fs::create_dir_all(&dir).ok()?;
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("tbg-background.log"))
+        .ok()
 }
 
 /// 剥离行首 UTF-8 BOM（U+FEFF）——它不是 `trim()` 语义的空白，
@@ -339,9 +422,11 @@ impl L10n {
     fn item0(&self) -> &'static str {
         match self.lang {
             Lang::En => {
-                "  [0] exit                   (stop watch if running, optionally restore, exit)"
+                "  [0] exit                   (stop watch; [y] restore / [n] keep marks / [k] keep watch alive)"
             }
-            Lang::Zh => "  [0] 退出（若 watch 运行中则先停止，可选还原，然后退出）",
+            Lang::Zh => {
+                "  [0] 退出（停止 watch；[y] 还原 / [n] 保留改写 / [k] 后台保活）"
+            }
         }
     }
 
@@ -468,8 +553,38 @@ impl L10n {
 
     fn exit_confirm(&self) -> &'static str {
         match self.lang {
-            Lang::En => "watch is running — restore rewrites before exit? [y/N] ",
-            Lang::Zh => "watch 运行中——退出前先还原改写？[y/N] ",
+            // 任务 31：新增 k = 退出保活（分离式后台重启 watch）；y/N
+            // 原语义不变（y=先还原，n/空=保留改写停止 watch）
+            Lang::En => {
+                "watch is running — restore before exit? [y/N] (k = exit but keep the watch running in the background): "
+            }
+            Lang::Zh => {
+                "watch 运行中——退出前先还原改写？[y/N]（k = 退出但 watch 后台保活继续运行）："
+            }
+        }
+    }
+
+    /// 任务 31：退出保活成功提示。
+    fn background_started(&self, pid: u32) -> String {
+        match self.lang {
+            Lang::En => format!(
+                "menu: background watch started (pid {pid}) — rewrites keep being applied to new windows (log: %LOCALAPPDATA%\\tbg-lite\\tbg-background.log); run tbg-lite and use [3] to stop it, or `install` for boot persistence"
+            ),
+            Lang::Zh => format!(
+                "menu：后台 watch 已启动（pid {pid}）——新窗口将继续被标记（日志：%LOCALAPPDATA%\\tbg-lite\\tbg-background.log）；再运行 tbg-lite 用 [3] 停止，开机延续用 `install`"
+            ),
+        }
+    }
+
+    /// 任务 31：退出保活失败提示（已有改写不受影响，仅新窗口不再标记）。
+    fn background_failed(&self, e: &str) -> String {
+        match self.lang {
+            Lang::En => format!(
+                "menu: background watch failed to start: {e} (rewrites on existing windows stay; new windows are no longer marked)"
+            ),
+            Lang::Zh => format!(
+                "menu：后台 watch 启动失败：{e}（已有窗口的改写保留；新窗口不再标记）"
+            ),
         }
     }
 
@@ -653,8 +768,8 @@ pub(crate) fn run() -> ExitCode {
             }
             "0" => {
                 if let Some(s) = session.take() {
-                    let restore_first = match prompt(loc.exit_confirm()) {
-                        Some(confirm) => is_yes(&confirm),
+                    let answer = match prompt(loc.exit_confirm()) {
+                        Some(confirm) => confirm,
                         None => {
                             println!();
                             println!("{}", loc.stdin_closed_watch_kept());
@@ -662,6 +777,13 @@ pub(crate) fn run() -> ExitCode {
                             return exit_code(exit_restore_failed);
                         }
                     };
+                    // 任务 31：k = 退出保活（分离式后台重启 watch）。
+                    // 解析先于 stop（答案与 watch 状态无关，先读 stdin）；
+                    // 重启必须在 stop_and_join 之后（互斥体释放，见
+                    // spawn_detached_watch 注释）
+                    let keep_background = is_keep(&answer);
+                    let restore_first = !keep_background && is_yes(&answer);
+                    // 先停（互斥体随线程 Drop 释放），后启
                     match s.stop_and_join() {
                         Ok(()) => println!("{}", loc.watch_stopped_stats()),
                         Err(e) => println!("{}", loc.watch_stop_failed(&e)),
@@ -673,6 +795,11 @@ pub(crate) fn run() -> ExitCode {
                                 println!("{}", loc.restore_failed(&e));
                                 exit_restore_failed = true;
                             }
+                        }
+                    } else if keep_background {
+                        match spawn_detached_watch(s.strategy, s.group_name.as_deref()) {
+                            Ok(pid) => println!("{}", loc.background_started(pid)),
+                            Err(e) => println!("{}", loc.background_failed(&e)),
                         }
                     }
                 }

@@ -112,7 +112,8 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   任务 29：文案双语（en/zh，GetUserDefaultUILanguage 自动检测 + L 键
   切换，仅菜单层——watch/inspect/restore 技术输出保持英文）；任务 30：
   `[6]` 注入路线入口（信息 + Windhawk 协同引导，零注入代码，§5 红线
-  不破）
+  不破）；任务 31：`[0]` 退出 `k` 选项保活（先停后启分离重启
+  `watch --duration 0`，stdio 显式导向 tbg-background.log）
 - `src/appid.rs` —— AUMID 读写核心（属性存储 API）；线路一/线路二标记
   （`~TBG~w` 后缀 / `TBG.Group.` 共享前缀）
 - `src/winevent.rs` —— `watch` 实现：SetWinEventHook 事件驱动 + 双线路改写
