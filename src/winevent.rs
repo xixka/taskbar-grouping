@@ -994,6 +994,10 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     let mut last_shell_poll = Instant::now();
     // 任务 28：回写对抗的周期复核节拍（5s；NAMECHANGE 入口之外的兜底）
     let mut last_reassert_poll = Instant::now();
+    // 任务 33（P0-B）：熔断心跳节拍——每 5s 原子刷 health 文件的
+    // `running` 行，开机死循环判定以“心跳 − start”为存活时长，
+    // 与两次开机的间隔无关（见 health.rs 模块注释）
+    let mut last_health_beat = Instant::now();
     loop {
         // 任务 14：菜单模式的停止标志——置位即优雅退出（摘钩 + 终扫 +
         // 统计，见循环后的公共退出路径）。启动扫存量在进泵前无条件跑完，
@@ -1073,6 +1077,12 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
                     unsafe { state.reverify_handled() };
                 }
             });
+        }
+        // 任务 33（P0-B）：熔断心跳——与回写复核同节拍独立计数，写失败
+        // 静默（health 内部尽力而为）
+        if last_health_beat.elapsed() >= Duration::from_secs(health::HEARTBEAT_SECS) {
+            last_health_beat = Instant::now();
+            health.heartbeat();
         }
     }
 

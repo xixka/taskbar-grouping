@@ -67,18 +67,20 @@ fn tmp_path(path: &Path) -> PathBuf {
 }
 
 /// 原子写（审计 BUG-03）：同目录临时文件 + fsync + rename 原子替换。
-fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
+/// 任务 33（审查 P0-B/O）：提升为 `pub(crate)` 供 health 状态文件复用
+/// （熔断心跳每 5s 重写一次，同样不能落半行残文）；错误文案保持通用。
+pub(crate) fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
     let tmp = tmp_path(path);
     let mut f = File::create(&tmp)
-        .map_err(|e| format!("restore map tmp create failed ({}): {e}", tmp.display()))?;
+        .map_err(|e| format!("atomic write: tmp create failed ({}): {e}", tmp.display()))?;
     f.write_all(content.as_bytes())
-        .map_err(|e| format!("restore map tmp write failed: {e}"))?;
+        .map_err(|e| format!("atomic write: tmp write failed: {e}"))?;
     // 落盘完成后再替换主文件，崩溃窗口期内主表保持上一个完整版本
     f.sync_all()
-        .map_err(|e| format!("restore map tmp sync failed: {e}"))?;
+        .map_err(|e| format!("atomic write: tmp sync failed: {e}"))?;
     drop(f);
     fs::rename(&tmp, path)
-        .map_err(|e| format!("restore map rename failed ({} -> {}): {e}", tmp.display(), path.display()))
+        .map_err(|e| format!("atomic write: rename failed ({} -> {}): {e}", tmp.display(), path.display()))
 }
 
 fn serialize(entries: &BTreeMap<usize, (String, String)>) -> String {
