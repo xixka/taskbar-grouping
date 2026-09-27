@@ -91,12 +91,13 @@ pub(crate) unsafe fn window_text(hwnd: HWND) -> String {
         TEXT_TIMEOUT_MS,
         None,
     );
-    if res == 0 {
-        // 失败 / 超时 / 挂起：视作无标题（跳过该窗口本轮评估）
+    // LRESULT 新类型（isize）：0 = 失败 / 超时 / 挂起（视作无标题，
+    // 跳过该窗口本轮评估）；WM_GETTEXT 成功时 = 拷贝的字符数（不含 NUL）
+    if res.0 <= 0 {
         return String::new();
     }
-    // res = 拷贝的字符数（不含 NUL）；防御性截断
-    let n = (res as usize).min(buf.len() - 1);
+    // 防御性截断（正常 ≤ 缓冲容量）
+    let n = (res.0 as usize).min(buf.len() - 1);
     String::from_utf16_lossy(&buf[..n])
 }
 
