@@ -100,6 +100,35 @@ fn pwstr_to_string(p: PWSTR) -> Option<String> {
     Some(String::from_utf16_lossy(&wide))
 }
 
+/// 命名互斥体获取（共享逻辑）：`ERROR_ALREADY_EXISTS` = 已有持有者，
+/// 返回带互斥体名的拒绝消息。
+fn acquire_named(name: &str) -> Result<HANDLE, String> {
+    unsafe {
+        let hname = HSTRING::from(name);
+        let handle = CreateMutexW(None, false, &hname)
+            .map_err(|e| format!("cannot create mutex '{name}': {e}"))?;
+        // CreateMutexW 成功返回后 GetLastError 保留创建原因；
+        // 期间不得再调其他 Win32 API（windows crate 包装在成功路径
+        // 上不触碰 LastError，已核对 0.58 源码）。
+        if GetLastError() == ERROR_ALREADY_EXISTS {
+            let _ = CloseHandle(handle);
+            return Err(format!(
+                "another tbg-lite instance holds '{name}' (concurrency guard); \
+                 stop it before running this command"
+            ));
+        }
+        Ok(handle)
+    }
+}
+
+/// 释放互斥体（Drop 共享）。
+fn release_mutex(handle: HANDLE) {
+    unsafe {
+        let _ = ReleaseMutex(handle);
+        let _ = CloseHandle(handle);
+    }
+}
+
 /// 映射表互斥守卫：持有至 Drop（进程退出/命令结束自动释放）。
 pub(crate) struct MapMutex(HANDLE);
 
@@ -108,31 +137,51 @@ impl MapMutex {
     /// 由调用方拒绝运行（单实例红线，审计 BUG-02 修复方案 1）。
     pub(crate) fn acquire() -> Result<Self, String> {
         let name = mutex_name();
-        unsafe {
-            let hname = HSTRING::from(name.as_str());
-            let handle = CreateMutexW(None, false, &hname)
-                .map_err(|e| format!("cannot create mutex '{name}': {e}"))?;
-            // CreateMutexW 成功返回后 GetLastError 保留创建原因；
-            // 期间不得再调其他 Win32 API（windows crate 包装在成功路径
-            // 上不触碰 LastError，已核对 0.58 源码）。
-            if GetLastError() == ERROR_ALREADY_EXISTS {
-                let _ = CloseHandle(handle);
-                return Err(format!(
-                    "another tbg-lite instance holds the restore map ({name}); \
-                     stop it before running this command (concurrency guard, audit BUG-02)"
-                ));
-            }
-            Ok(Self(handle))
-        }
+        let handle = acquire_named(&name).map_err(|_| {
+            format!(
+                "another tbg-lite instance holds the restore map ({name}); \
+                 stop it before running this command (concurrency guard, audit BUG-02)"
+            )
+        })?;
+        Ok(Self(handle))
     }
 }
 
 impl Drop for MapMutex {
     fn drop(&mut self) {
-        unsafe {
-            let _ = ReleaseMutex(self.0);
-            let _ = CloseHandle(self.0);
-        }
+        release_mutex(self.0);
+    }
+}
+
+/// 任务 49（审查 P3-M，2026-09-25）：watch 单实例互斥。
+///
+/// 同一策略线路（+组名）的 watch 并发运行没有意义且互相打架：改写同
+/// 一批窗口、标记互冲、统计互相污染、shell 重启重扫重复执行。互斥名
+/// `Local\tbg-lite.watch.<strategy>[.<group>]`（ungroup 一把、每个组名
+/// 一把）——与映射表互斥（Global+SID）**正交**：ungroup watch 不写映射
+/// 表不持 MapMutex，但同线路双开仍拒；不同线路可并存（既有语义）。
+/// 守卫持有至 `winevent::run` 返回（线程结束/进程退出自动释放）。
+pub(crate) struct WatchMutex(HANDLE);
+
+impl WatchMutex {
+    pub(crate) fn acquire(strategy: &str, group: Option<&str>) -> Result<Self, String> {
+        let name = match group {
+            Some(g) => format!("Local\\tbg-lite.watch.{strategy}.{g}"),
+            None => format!("Local\\tbg-lite.watch.{strategy}"),
+        };
+        let handle = acquire_named(&name).map_err(|_| {
+            format!(
+                "another tbg-lite watch is already running on this strategy line ({name}); \
+                 stop it first: 'tbg-lite stop' (background), menu [3], or Ctrl+C"
+            )
+        })?;
+        Ok(Self(handle))
+    }
+}
+
+impl Drop for WatchMutex {
+    fn drop(&mut self) {
+        release_mutex(self.0);
     }
 }
 

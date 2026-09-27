@@ -939,6 +939,16 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
         ring.log("circuit breaker tripped: autostart uninstalled");
     }
 
+    // 任务 49（审查 P3-M）：watch 单实例互斥——同线路（+组名）双开
+    // 互相打架（同批窗口改写互冲 / 统计污染 / shell 重启重复重扫），
+    // 后启动者拒绝并指明停止途径。守卫持有至 run 返回（线程结束/
+    // 进程退出自动释放）。与映射表互斥（Global+SID）正交：ungroup
+    // watch 不写表不持 MapMutex，但同线路双开仍拒。
+    let strategy_name =
+        if matches!(opts.strategy, WatchStrategy::Ungroup) { "ungroup" } else { "group" };
+    let _watch_mutex =
+        crate::singleinstance::WatchMutex::acquire(strategy_name, opts.group_name.as_deref())?;
+
     // 任务 37（审查 D）：后台模式的命名停止事件——`tbg-lite stop` 打开
     // `Local\tbg-lite.stop.<pid>` 置位，消息泵每 ≤1s 轮询到即优雅退出。
     // 创建失败只告警（stop 命令退化为超时后硬杀，仍可用）。
@@ -1083,7 +1093,6 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     // `status` 发现本实例。早退路径不经过这里，不会留下陈旧登记；
     // 崩溃/强杀残留由 stop/status 检测死 PID 回收。登记失败不阻断。
     if opts.background {
-        let strategy_name = if matches!(opts.strategy, WatchStrategy::Ungroup) { "ungroup" } else { "group" };
         match crate::watchpid::register(strategy_name, opts.group_name.as_deref()) {
             Ok(()) => ring.log("background watch registered (tbg-watch.tsv)"),
             Err(e) => {
