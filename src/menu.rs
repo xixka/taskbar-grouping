@@ -28,7 +28,6 @@
 //! 双语化；watch / inspect / restore 技术输出保持英文（CI 断言与文档
 //! 口径）。en-US CI Runner 走 EN 分支，Phase M 菜单流与断言不变。
 
-use std::io::{self, Write};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -37,6 +36,8 @@ use std::time::Duration;
 
 use windows::Win32::Globalization::GetUserDefaultUILanguage;
 
+use crate::outln;
+use crate::outp;
 use crate::winevent::{self, WatchOptions, WatchStrategy};
 
 /// 一个正在后台运行的 watch 会话。
@@ -162,18 +163,27 @@ fn strip_bom(line: &str) -> &str {
 
 /// 读一行 stdin。`None` = EOF / 读失败（调用方应走优雅退出路径）。
 /// 行首 U+FEFF（BOM）剥离后返回（见 `strip_bom`）。
+///
+/// 任务 41（审查 P1-J）：改字节读 + `from_utf8_lossy`——旧
+/// `read_line` 在 UTF-8 外编码（GBK 控制台）下输入中文会
+/// `Err(InvalidData)` → 被当 EOF → **菜单静默退出**；lossy 读把
+/// 非法序列替换为 U+FFFD（输入乱码但不退出）。入口的 CP 守卫
+/// （`console::utf8_console`）已把控制台输入切 65001，正常中文输入
+/// 实为 UTF-8 字节、无损。
 fn read_line() -> Option<String> {
-    let mut s = String::new();
-    match io::stdin().read_line(&mut s) {
+    use std::io::BufRead;
+    let mut buf: Vec<u8> = Vec::new();
+    match std::io::stdin().lock().read_until(b'\n', &mut buf) {
         Ok(0) | Err(_) => None,
-        Ok(_) => Some(strip_bom(&s).to_string()),
+        // 管道写端（PS StreamWriter）首写前置 UTF-8 BOM：read_until 会
+        // 把它并进首行，strip_bom 剥离
+        Ok(_) => Some(strip_bom(&String::from_utf8_lossy(&buf)).to_string()),
     }
 }
 
-/// 打印提示符并读一行（提示符需要显式 flush：stdout 是行缓冲）。
+/// 打印提示符并读一行（控制台直写无缓冲；管道路径自带 flush）。
 fn prompt(text: &str) -> Option<String> {
-    print!("{text}");
-    let _ = io::stdout().flush();
+    outp!("{text}");
     read_line()
 }
 
@@ -682,29 +692,29 @@ impl L10n {
 }
 
 fn print_menu(loc: &L10n, running: Option<&WatchSession>) {
-    println!();
+    outln!();
     if let Some(s) = running {
-        println!("{}", loc.status_running(s.label));
+        outln!("{}", loc.status_running(s.label));
     } else {
-        println!("{}", loc.status_not_running());
+        outln!("{}", loc.status_not_running());
     }
     // 任务 37（D）：后台保活实例（[0]→k / install 自启）存在时提示
     // （陈旧登记静默回收——菜单不当告警员）
     if let Some(info) = crate::watchpid::read() {
         if crate::watchpid::is_running(info.pid) {
-            println!("{}", loc.status_background_running(info.pid));
+            outln!("{}", loc.status_background_running(info.pid));
         } else {
             crate::watchpid::clear(info.pid);
         }
     }
-    println!("{}", loc.item1());
-    println!("{}", loc.item2());
-    println!("{}", loc.item3());
-    println!("{}", loc.item4());
-    println!("{}", loc.item5());
-    println!("{}", loc.item6());
-    println!("{}", loc.item0());
-    println!("{}", loc.lang_hint());
+    outln!("{}", loc.item1());
+    outln!("{}", loc.item2());
+    outln!("{}", loc.item3());
+    outln!("{}", loc.item4());
+    outln!("{}", loc.item5());
+    outln!("{}", loc.item6());
+    outln!("{}", loc.item0());
+    outln!("{}", loc.lang_hint());
 }
 
 /// 菜单主循环。返回进程退出码。
@@ -712,8 +722,8 @@ pub(crate) fn run() -> ExitCode {
     // 任务 29：语言 = 系统 UI 语言自动检测（en-US CI → 英文，中文系统 →
     // 中文），菜单内 L 键随时切换（仅影响菜单层文案）。
     let mut loc = L10n::new();
-    println!("{}", loc.banner());
-    println!("{}", loc.tip());
+    outln!("{}", loc.banner());
+    outln!("{}", loc.tip());
     let mut session: Option<WatchSession> = None;
     let mut exit_restore_failed = false;
     loop {
@@ -722,11 +732,11 @@ pub(crate) fn run() -> ExitCode {
         if let Some(s) = session.take() {
             if s.handle.is_finished() {
                 match s.handle.join() {
-                    Ok(Ok(())) => println!("{}", loc.watch_ended_own()),
-                    Ok(Err(e)) => println!("{}", loc.watch_failed(&e)),
-                    Err(_) => println!("{}", loc.watch_panicked()),
+                    Ok(Ok(())) => outln!("{}", loc.watch_ended_own()),
+                    Ok(Err(e)) => outln!("{}", loc.watch_failed(&e)),
+                    Err(_) => outln!("{}", loc.watch_panicked()),
                 }
-                println!("{}", loc.status_not_running());
+                outln!("{}", loc.status_not_running());
             } else {
                 session = Some(s);
             }
@@ -734,8 +744,8 @@ pub(crate) fn run() -> ExitCode {
         print_menu(&loc, session.as_ref());
         let Some(line) = prompt("> ") else {
             // stdin 关闭：视同 [0]，默认不还原（无法交互确认）
-            println!();
-            println!("{}", loc.stdin_closed_watch_kept());
+            outln!();
+            outln!("{}", loc.stdin_closed_watch_kept());
             if let Some(s) = session.take() {
                 let _ = s.stop_and_join();
             }
@@ -746,49 +756,49 @@ pub(crate) fn run() -> ExitCode {
                 // 任务 29：语言切换（会话内即时生效，不落盘——plan v2 §6-2
                 // 配置文件维持不需要）
                 loc.toggle();
-                println!("{}", loc.lang_switched());
+                outln!("{}", loc.lang_switched());
             }
             "1" => {
                 if session.is_some() {
-                    println!("{}", loc.watch_already_running());
+                    outln!("{}", loc.watch_already_running());
                 } else {
                     session = Some(spawn_watch(WatchStrategy::Ungroup, None));
-                    println!("{}", loc.watch_started_ungroup());
+                    outln!("{}", loc.watch_started_ungroup());
                 }
             }
             "2" => {
                 if session.is_some() {
-                    println!("{}", loc.watch_already_running());
+                    outln!("{}", loc.watch_already_running());
                     continue;
                 }
                 let Some(name_line) = prompt(loc.group_name_prompt()) else {
-                    println!();
-                    println!("{}", loc.stdin_closed_watch_kept());
+                    outln!();
+                    outln!("{}", loc.stdin_closed_watch_kept());
                     return exit_code(exit_restore_failed);
                 };
                 let name = name_line.trim();
                 if name.is_empty() {
-                    println!("{}", loc.cancelled_empty_group());
+                    outln!("{}", loc.cancelled_empty_group());
                     continue;
                 }
                 // 复用 CLI 同一套组名校验（长度/字符集 → 共享 AUMID 构造）
                 if let Err(e) = crate::appid::group_aumid(name) {
-                    println!("{}", loc.invalid_group_name(&e));
+                    outln!("{}", loc.invalid_group_name(&e));
                     continue;
                 }
                 session = Some(spawn_watch(
                     WatchStrategy::Group,
                     Some(name.to_string()),
                 ));
-                println!("{}", loc.watch_started_group(name));
+                outln!("{}", loc.watch_started_group(name));
             }
             "3" => {
                 match session.take() {
                     Some(s) => match s.stop_and_join() {
-                        Ok(()) => println!("{}", loc.watch_stopped_kept()),
-                        Err(e) => println!("{}", loc.watch_stop_failed(&e)),
+                        Ok(()) => outln!("{}", loc.watch_stopped_kept()),
+                        Err(e) => outln!("{}", loc.watch_stop_failed(&e)),
                     },
-                    None => println!("{}", loc.watch_not_running()),
+                    None => outln!("{}", loc.watch_not_running()),
                 }
                 // 任务 37（D）：[3] 也停掉后台保活实例（[0]→k 启动的
                 // 分离进程）——旧提示"用 [3] 停止"从此为真。无登记时
@@ -796,45 +806,45 @@ pub(crate) fn run() -> ExitCode {
                 let bg = crate::watchpid::stop_registered();
                 let msg = loc.background_watch_result(bg);
                 if !msg.is_empty() {
-                    println!("{msg}");
+                    outln!("{msg}");
                 }
             }
             "4" => {
                 if session.is_some() {
-                    println!("{}", loc.stop_first_restore());
+                    outln!("{}", loc.stop_first_restore());
                     continue;
                 }
                 let Some(confirm) = prompt(loc.restore_confirm()) else {
-                    println!();
-                    println!("{}", loc.stdin_closed_kept());
+                    outln!();
+                    outln!("{}", loc.stdin_closed_kept());
                     return exit_code(exit_restore_failed);
                 };
                 if !is_yes(&confirm) {
-                    println!("{}", loc.restore_cancelled());
+                    outln!("{}", loc.restore_cancelled());
                     continue;
                 }
                 match crate::cmd_restore(&[]) {
-                    Ok(()) => println!("{}", loc.restore_finished()),
-                    Err(e) => println!("{}", loc.restore_failed(&e)),
+                    Ok(()) => outln!("{}", loc.restore_finished()),
+                    Err(e) => outln!("{}", loc.restore_failed(&e)),
                 }
             }
             "5" => {
                 if let Err(e) = crate::cmd_inspect(&[]) {
-                    println!("{}", loc.inspect_failed(&e));
+                    outln!("{}", loc.inspect_failed(&e));
                 }
             }
             "6" => {
                 // 任务 30：注入路线入口——信息 + 协同引导（无注入代码，
                 // plan v2 §5 红线不破；实操载体 = Windhawk）
-                println!("{}", loc.injection_route_info(session.is_some()));
+                outln!("{}", loc.injection_route_info(session.is_some()));
             }
             "0" => {
                 if let Some(s) = session.take() {
                     let answer = match prompt(loc.exit_confirm()) {
                         Some(confirm) => confirm,
                         None => {
-                            println!();
-                            println!("{}", loc.stdin_closed_watch_kept());
+                            outln!();
+                            outln!("{}", loc.stdin_closed_watch_kept());
                             let _ = s.stop_and_join();
                             return exit_code(exit_restore_failed);
                         }
@@ -850,28 +860,28 @@ pub(crate) fn run() -> ExitCode {
                     let bg_group = s.group_name.clone();
                     // 先停（互斥体随线程 Drop 释放），后启
                     match s.stop_and_join() {
-                        Ok(()) => println!("{}", loc.watch_stopped_stats()),
-                        Err(e) => println!("{}", loc.watch_stop_failed(&e)),
+                        Ok(()) => outln!("{}", loc.watch_stopped_stats()),
+                        Err(e) => outln!("{}", loc.watch_stop_failed(&e)),
                     }
                     if restore_first {
                         match crate::cmd_restore(&[]) {
-                            Ok(()) => println!("{}", loc.restore_finished()),
+                            Ok(()) => outln!("{}", loc.restore_finished()),
                             Err(e) => {
-                                println!("{}", loc.restore_failed(&e));
+                                outln!("{}", loc.restore_failed(&e));
                                 exit_restore_failed = true;
                             }
                         }
                     } else if keep_background {
                         match spawn_detached_watch(bg_strategy, bg_group.as_deref()) {
-                            Ok(pid) => println!("{}", loc.background_started(pid)),
-                            Err(e) => println!("{}", loc.background_failed(&e)),
+                            Ok(pid) => outln!("{}", loc.background_started(pid)),
+                            Err(e) => outln!("{}", loc.background_failed(&e)),
                         }
                     }
                 }
-                println!("{}", loc.exiting_bye());
+                outln!("{}", loc.exiting_bye());
                 return exit_code(exit_restore_failed);
             }
-            other => println!("{}", loc.unknown_option(other)),
+            other => outln!("{}", loc.unknown_option(other)),
         }
     }
 }

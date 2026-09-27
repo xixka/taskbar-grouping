@@ -182,6 +182,11 @@ fn main() -> ExitCode {
         std::process::exit(101);
     }));
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // 任务 41（审查 J）：控制台输入/输出代码页 UTF-8 化（尽力而为，
+    // 退出恢复；仅 stdout/stdin 是控制台时动作，管道/CI 不受影响）。
+    // 菜单层输出已走 WriteConsoleW 与代码页无关；此项覆盖技术输出
+    // （watch/inspect 的中文标题行）与控制台中文输入。
+    let _cp_guard = console::utf8_console();
     match args.first().map(String::as_str) {
         // 任务 14（2026-09-22 维护者指示）：无参数启动 → 交互菜单
         // （含退出项，不需要 Ctrl+C）；--help 仍打印本帮助文本
