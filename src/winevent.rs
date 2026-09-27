@@ -497,7 +497,19 @@ impl WatcherState {
             );
             return;
         };
-        map.record(key, &shared, &aumid);
+        // 任务 36（P1-F）：原生 AUMID / 共享值含 \r \n 时拒绝记录并跳过
+        // 改写（TSV 行式格式下换行自毁整表）；write_fail 计数 + 告警，
+        // 保住其余窗口与整表可用性
+        if !map.record(key, &shared, &aumid) {
+            self.stats.write_fail += 1;
+            println!(
+                "{} {} {} group write REJECTED: AUMID contains line breaks (map integrity guard, task 36; AUMID left untouched)",
+                self.ts(),
+                name,
+                fmt_window(hwnd)
+            );
+            return;
+        }
         if let Err(e) = map.save() {
             map.remove(key);
             self.stats.write_fail += 1;
@@ -622,7 +634,17 @@ impl WatcherState {
                         );
                         return;
                     };
-                    map.record(key, &self.group_value, &aumid);
+                    // 任务 36（P1-F）：原值带换行 → 拒绝补录并跳过补写
+                    // （AUMID 保持现状，无还原损失）
+                    if !map.record(key, &self.group_value, &aumid) {
+                        self.stats.write_fail += 1;
+                        eprintln!(
+                            "{} REASSERT {} reassert REJECTED: AUMID contains line breaks (map integrity guard, task 36; AUMID left untouched)",
+                            self.ts(),
+                            fmt_window(hwnd)
+                        );
+                        return;
+                    }
                     if let Err(e) = map.save() {
                         map.remove(key);
                         self.stats.write_fail += 1;
