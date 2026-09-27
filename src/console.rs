@@ -124,8 +124,8 @@ use std::io::IsTerminal;
 
 use windows::Win32::Globalization::CP_UTF8;
 use windows::Win32::System::Console::{
-    GetConsoleCP, GetConsoleOutputCP, SetConsoleCP, SetConsoleOutputCP, WriteConsoleW,
-    STD_OUTPUT_HANDLE,
+    GetConsoleCP, GetConsoleOutputCP, GetStdHandle, SetConsoleCP, SetConsoleOutputCP,
+    WriteConsoleW, STD_OUTPUT_HANDLE,
 };
 
 /// stdout 是否为交互控制台（管道/重定向/NUL → false）。
