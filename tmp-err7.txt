@@ -1,7 +1,0 @@
-:13:08.8441245Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused @@ 2026-09-27T01:13:08.8442708Z [36;1m  echo "$CARGO_HOME\bin"
-:13:14.5646907Z ##[start-action display=Work around spurious network errors in curl 8.0 @@ 2026-09-27T01:13:14.5790493Z [36;1m# https://rust-lang.zuli
-:14:08.1058587Z [1m[91merror[E0432][0m[1m[97m: unresolved import `windows::Win32:: @@  [0msrc\singleinstance.rs:30:31
-:14:08.7682784Z [1m[91merror[E0133][0m[1m[97m: call to unsafe function `std::ptr:: @@  [0msrc\singleinstance.rs:98:13
-:14:08.9478223Z [1m[97mSome errors have detailed explanations: E0133, E0432.[0m @@ 2026-09-27T01:14:08.9607716Z [1m[93mwarning[0m: `tbg-lite
-:14:08.9479285Z [1m[97mFor more information about an error, try `rustc --explain E013 @@ 2026-09-27T01:14:08.9611981Z [1m[91merror[0m: could not c
-:14:09.1014450Z ##[error]Process completed with exit code 1. @@ 2026-09-27T01:14:09.3422817Z [command]"C:\Program Files\Git\
