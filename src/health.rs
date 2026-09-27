@@ -320,9 +320,9 @@ mod tests {
         // v1 行 + v2 行同文件（后行覆盖前行，宽容）
         assert_eq!(
             parse("running\t10\nrunning\t20\t30\n"),
-            running(20, 30)
+            (0, running(20, 30))
         );
         // v2 心跳列坏值 → 降级 v1（heartbeat = None），start 仍可读
-        assert_eq!(parse("running\t20\tzz\n"), running_v1(20));
+        assert_eq!(parse("running\t20\tzz\n"), (0, running_v1(20)));
     }
 }
