@@ -93,9 +93,11 @@ fn pwstr_to_string(p: PWSTR) -> Option<String> {
     }
     let mut wide = Vec::new();
     let mut q = p.0 as *const u16;
-    while unsafe { *q } != 0 {
-        wide.push(unsafe { *q });
-        q = q.add(1);
+    unsafe {
+        while *q != 0 {
+            wide.push(*q);
+            q = q.add(1);
+        }
     }
     Some(String::from_utf16_lossy(&wide))
 }
