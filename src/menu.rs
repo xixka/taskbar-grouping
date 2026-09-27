@@ -696,7 +696,7 @@ impl L10n {
 }
 
 fn print_menu(loc: &L10n, running: Option<&WatchSession>) {
-    outln!();
+    outln!("");
     if let Some(s) = running {
         outln!("{}", loc.status_running(s.label));
     } else {
@@ -748,7 +748,7 @@ pub(crate) fn run() -> ExitCode {
         print_menu(&loc, session.as_ref());
         let Some(line) = prompt("> ") else {
             // stdin 关闭：视同 [0]，默认不还原（无法交互确认）
-            outln!();
+            outln!("");
             outln!("{}", loc.stdin_closed_watch_kept());
             if let Some(s) = session.take() {
                 let _ = s.stop_and_join();
@@ -776,7 +776,7 @@ pub(crate) fn run() -> ExitCode {
                     continue;
                 }
                 let Some(name_line) = prompt(loc.group_name_prompt()) else {
-                    outln!();
+                    outln!("");
                     // 任务 47（审查 K-③）：此处 watch 必未运行（上面
                     // session.is_some() 已 continue）——旧文案恒错报
                     // "watch 已停止"；与 [4] EOF 分支同文案
@@ -822,7 +822,7 @@ pub(crate) fn run() -> ExitCode {
                     continue;
                 }
                 let Some(confirm) = prompt(loc.restore_confirm()) else {
-                    outln!();
+                    outln!("");
                     outln!("{}", loc.stdin_closed_kept());
                     return exit_code(exit_restore_failed);
                 };
@@ -850,7 +850,7 @@ pub(crate) fn run() -> ExitCode {
                     let answer = match prompt(loc.exit_confirm()) {
                         Some(confirm) => confirm,
                         None => {
-                            outln!();
+                            outln!("");
                             outln!("{}", loc.stdin_closed_watch_kept());
                             let _ = s.stop_and_join();
                             return exit_code(exit_restore_failed);

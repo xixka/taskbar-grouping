@@ -153,7 +153,7 @@ impl StopEvent {
 
 impl Drop for StopEvent {
     fn drop(&mut self) {
-        unsafe { let _ = CloseHandle(self.0) };
+        unsafe { let _ = CloseHandle(self.0); };
     }
 }
 
@@ -172,7 +172,7 @@ pub(crate) fn is_running(pid: u32) -> bool {
     let Some(h) = open_process(pid) else { return false };
     let mut code = 0u32;
     let ok = unsafe { GetExitCodeProcess(h, &mut code) }.is_ok();
-    unsafe { let _ = CloseHandle(h) };
+    unsafe { let _ = CloseHandle(h); };
     ok && code == STILL_ACTIVE
 }
 
@@ -184,7 +184,7 @@ pub(crate) fn signal_stop(pid: u32) -> bool {
         return false;
     };
     let ok = unsafe { SetEvent(h) }.is_ok();
-    unsafe { let _ = CloseHandle(h) };
+    unsafe { let _ = CloseHandle(h); };
     ok
 }
 
@@ -200,7 +200,7 @@ pub(crate) fn terminate(handle: HANDLE) -> bool {
 
 /// 关闭外部打开的进程句柄。
 pub(crate) fn close_handle(handle: HANDLE) {
-    unsafe { let _ = CloseHandle(handle) };
+    unsafe { let _ = CloseHandle(handle); };
 }
 
 /// `stop` 的完整流程（CLI `tbg-lite stop` 与菜单 `[3]` 共用）。

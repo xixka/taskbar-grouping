@@ -1,0 +1,431 @@
+﻿2026-09-27T01:02:24.6279620Z Current runner version: '2.337.0'
+2026-09-27T01:02:24.6305687Z ##[group]Runner Image Provisioner
+2026-09-27T01:02:24.6306508Z Hosted Compute Agent
+2026-09-27T01:02:24.6307055Z Version: 20260828.587
+2026-09-27T01:02:24.6307767Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-09-27T01:02:24.6308468Z Build Date: 2026-08-28T16:44:25Z
+2026-09-27T01:02:24.6309124Z Worker ID: {a6ed5ab4-c421-4724-b57f-c4f8806312f6}
+2026-09-27T01:02:24.6309777Z Azure Region: westus3
+2026-09-27T01:02:24.6310288Z ##[endgroup]
+2026-09-27T01:02:24.6311703Z ##[group]Operating System
+2026-09-27T01:02:24.6312349Z Microsoft Windows Server 2025
+2026-09-27T01:02:24.6313312Z 10.0.26100
+2026-09-27T01:02:24.6313909Z Datacenter
+2026-09-27T01:02:24.6314385Z ##[endgroup]
+2026-09-27T01:02:24.6314938Z ##[group]Runner Image
+2026-09-27T01:02:24.6315553Z Image: windows-2025-vs2026
+2026-09-27T01:02:24.6316090Z Version: 20260922.246.2
+2026-09-27T01:02:24.6317492Z Included Software: https://github.com/actions/runner-images/blob/win25-vs2026/20260922.246/images/windows/Windows2025-VS2026-Readme.md
+2026-09-27T01:02:24.6319070Z Image Release: https://github.com/actions/runner-images/releases/tag/win25-vs2026%2F20260922.246
+2026-09-27T01:02:24.6319984Z ##[endgroup]
+2026-09-27T01:02:24.6321057Z ##[group]GITHUB_TOKEN Permissions
+2026-09-27T01:02:24.6323133Z Contents: read
+2026-09-27T01:02:24.6324305Z Metadata: read
+2026-09-27T01:02:24.6324869Z Packages: read
+2026-09-27T01:02:24.6325383Z ##[endgroup]
+2026-09-27T01:02:24.6327416Z Secret source: Actions
+2026-09-27T01:02:24.6328277Z Cache mode: write
+2026-09-27T01:02:24.6328953Z Prepare workflow directory
+2026-09-27T01:02:24.6681637Z Prepare all required actions
+2026-09-27T01:02:24.6731526Z Getting action download info
+2026-09-27T01:02:24.9645222Z Download action repository 'actions/checkout@11d5960a326750d5838078e36cf38b85af677262' (SHA:11d5960a326750d5838078e36cf38b85af677262)
+2026-09-27T01:02:25.1017263Z Download action repository 'dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87' (SHA:6bed0761d98439e5a578e2877258200ad565ba87)
+2026-09-27T01:02:25.4874193Z Complete job name: build
+2026-09-27T01:02:25.6345489Z ##[group]Run actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+2026-09-27T01:02:25.6347091Z with:
+2026-09-27T01:02:25.6347622Z   repository: xixka/taskbar-grouping
+2026-09-27T01:02:25.6353125Z   token: ***
+2026-09-27T01:02:25.6353632Z   ssh-strict: true
+2026-09-27T01:02:25.6354121Z   ssh-user: git
+2026-09-27T01:02:25.6354622Z   persist-credentials: true
+2026-09-27T01:02:25.6355207Z   clean: true
+2026-09-27T01:02:25.6355704Z   sparse-checkout-cone-mode: true
+2026-09-27T01:02:25.6356252Z   fetch-depth: 1
+2026-09-27T01:02:25.6356700Z   fetch-tags: false
+2026-09-27T01:02:25.6357155Z   show-progress: true
+2026-09-27T01:02:25.6357616Z   lfs: false
+2026-09-27T01:02:25.6358035Z   submodules: false
+2026-09-27T01:02:25.6358502Z   set-safe-directory: true
+2026-09-27T01:02:25.6359030Z   allow-unsafe-pr-checkout: false
+2026-09-27T01:02:25.6359840Z ##[endgroup]
+2026-09-27T01:02:25.7897947Z Syncing repository: xixka/taskbar-grouping
+2026-09-27T01:02:25.7899800Z ##[group]Getting Git version info
+2026-09-27T01:02:25.7900510Z Working directory is 'D:\a\taskbar-grouping\taskbar-grouping'
+2026-09-27T01:02:25.8988226Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-27T01:02:26.3035103Z git version 2.55.0.windows.5
+2026-09-27T01:02:26.3093460Z ##[endgroup]
+2026-09-27T01:02:26.3117736Z Temporarily overriding HOME='D:\a\_temp\adf03ccf-6a6e-4fc6-9dd2-5cdd5d7bead1' before making global git config changes
+2026-09-27T01:02:26.3119426Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-27T01:02:26.3132706Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\taskbar-grouping\taskbar-grouping
+2026-09-27T01:02:26.3852736Z Deleting the contents of 'D:\a\taskbar-grouping\taskbar-grouping'
+2026-09-27T01:02:26.3858587Z ##[group]Initializing the repository
+2026-09-27T01:02:26.3867846Z [command]"C:\Program Files\Git\bin\git.exe" init D:\a\taskbar-grouping\taskbar-grouping
+2026-09-27T01:02:26.5014153Z Initialized empty Git repository in D:/a/taskbar-grouping/taskbar-grouping/.git/
+2026-09-27T01:02:26.5060373Z [command]"C:\Program Files\Git\bin\git.exe" remote add origin https://github.com/xixka/taskbar-grouping
+2026-09-27T01:02:26.5706510Z ##[endgroup]
+2026-09-27T01:02:26.5707752Z ##[group]Disabling automatic garbage collection
+2026-09-27T01:02:26.5714971Z [command]"C:\Program Files\Git\bin\git.exe" config --local gc.auto 0
+2026-09-27T01:02:26.6008620Z ##[endgroup]
+2026-09-27T01:02:26.6009811Z ##[group]Setting up auth
+2026-09-27T01:02:26.6021828Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-27T01:02:26.6316357Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-27T01:02:28.2486709Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-27T01:02:28.2821752Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-27T01:02:28.8090696Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-27T01:02:28.8395267Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-27T01:02:29.4007612Z [command]"C:\Program Files\Git\bin\git.exe" config --local http.https://github.com/.extraheader "AUTHORIZATION: basic ***"
+2026-09-27T01:02:29.4335227Z ##[endgroup]
+2026-09-27T01:02:29.4336016Z ##[group]Fetching the repository
+2026-09-27T01:02:29.4359642Z [command]"C:\Program Files\Git\bin\git.exe" -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules --depth=1 origin +86c1a993ce0b5fc2c2e6ca856bd5b5b631adc254:refs/remotes/origin/review-fixes
+2026-09-27T01:02:30.7842562Z From https://github.com/xixka/taskbar-grouping
+2026-09-27T01:02:30.7843523Z  * [new ref]         86c1a993ce0b5fc2c2e6ca856bd5b5b631adc254 -> origin/review-fixes
+2026-09-27T01:02:30.7883907Z ##[endgroup]
+2026-09-27T01:02:30.7884311Z ##[group]Determining the checkout info
+2026-09-27T01:02:30.7888154Z ##[endgroup]
+2026-09-27T01:02:30.7896800Z [command]"C:\Program Files\Git\bin\git.exe" sparse-checkout disable
+2026-09-27T01:02:30.8333158Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all extensions.worktreeConfig
+2026-09-27T01:02:30.8626594Z ##[group]Checking out the ref
+2026-09-27T01:02:30.8627237Z [command]"C:\Program Files\Git\bin\git.exe" checkout --progress --force -B review-fixes refs/remotes/origin/review-fixes
+2026-09-27T01:02:30.9340187Z Switched to a new branch 'review-fixes'
+2026-09-27T01:02:30.9404606Z branch 'review-fixes' set up to track 'origin/review-fixes'.
+2026-09-27T01:02:30.9457029Z ##[endgroup]
+2026-09-27T01:02:30.9883078Z [command]"C:\Program Files\Git\bin\git.exe" log -1 --format=%H
+2026-09-27T01:02:31.0141574Z 86c1a993ce0b5fc2c2e6ca856bd5b5b631adc254
+2026-09-27T01:02:31.0686068Z ##[group]Run dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+2026-09-27T01:02:31.0686556Z with:
+2026-09-27T01:02:31.0686752Z   toolchain: stable
+2026-09-27T01:02:31.0686951Z ##[endgroup]
+2026-09-27T01:02:31.0763680Z ##[start-action display=Parse toolchain version;id=__dtolnay_rust-toolchain.parse]
+2026-09-27T01:02:31.0939940Z ##[group]Run if [[ -z $toolchain ]]; then
+2026-09-27T01:02:31.0940352Z [36;1mif [[ -z $toolchain ]]; then[0m
+2026-09-27T01:02:31.0941125Z [36;1m  # GitHub does not enforce `required: true` inputs itself. https://github.com/actions/runner/issues/1070[0m
+2026-09-27T01:02:31.0941708Z [36;1m  echo "'toolchain' is a required input" >&2[0m
+2026-09-27T01:02:31.0942848Z [36;1m  exit 1[0m
+2026-09-27T01:02:31.0943171Z [36;1melif [[ $toolchain =~ ^stable' '[0-9]+' '(year|month|week|day)s?' 'ago$ ]]; then[0m
+2026-09-27T01:02:31.0943581Z [36;1m  if [[ Windows == macOS ]]; then[0m
+2026-09-27T01:02:31.0944130Z [36;1m    echo "toolchain=1.$((($(date -v-$(sed 's/stable \([0-9]*\) \(.\).*/\1\2/' <<< $toolchain) +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-09-27T01:02:31.0944634Z [36;1m  else[0m
+2026-09-27T01:02:31.0945018Z [36;1m    echo "toolchain=1.$((($(date --date "${toolchain#stable }" +%s)/60/60/24-16569)/7/6))" >> $GITHUB_OUTPUT[0m
+2026-09-27T01:02:31.0945461Z [36;1m  fi[0m
+2026-09-27T01:02:31.0945736Z [36;1melif [[ $toolchain =~ ^stable' 'minus' '[0-9]+' 'releases?$ ]]; then[0m
+2026-09-27T01:02:31.0946249Z [36;1m  echo "toolchain=1.$((($(date +%s)/60/60/24-16569)/7/6-${toolchain//[^0-9]/}))" >> $GITHUB_OUTPUT[0m
+2026-09-27T01:02:31.0946702Z [36;1melif [[ $toolchain =~ ^1\.[0-9]+$ ]]; then[0m
+2026-09-27T01:02:31.0947218Z [36;1m  echo "toolchain=1.$((i=${toolchain#1.}, c=($(date +%s)/60/60/24-16569)/7/6, i+9*i*(10*i<=c)+90*i*(100*i<=c)))" >> $GITHUB_OUTPUT[0m
+2026-09-27T01:02:31.0947711Z [36;1melse[0m
+2026-09-27T01:02:31.0947960Z [36;1m  echo "toolchain=$toolchain" >> $GITHUB_OUTPUT[0m
+2026-09-27T01:02:31.1011650Z [36;1mfi[0m
+2026-09-27T01:02:31.1080919Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-27T01:02:31.1081330Z env:
+2026-09-27T01:02:31.1081509Z   toolchain: stable
+2026-09-27T01:02:31.1081713Z ##[endgroup]
+2026-09-27T01:02:31.2761222Z ##[end-action id=__dtolnay_rust-toolchain.parse;outcome=success;conclusion=success;duration_ms=199]
+2026-09-27T01:02:31.2775509Z ##[start-action display=Construct rustup command line;id=__dtolnay_rust-toolchain.flags]
+2026-09-27T01:02:31.2926027Z ##[group]Run echo "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT
+2026-09-27T01:02:31.2926713Z [36;1mecho "targets=$(for t in ${targets//,/ }; do echo -n ' --target' $t; done)" >> $GITHUB_OUTPUT[0m
+2026-09-27T01:02:31.2927347Z [36;1mecho "components=$(for c in ${components//,/ }; do echo -n ' --component' $c; done)" >> $GITHUB_OUTPUT[0m
+2026-09-27T01:02:31.2927820Z [36;1mecho "downgrade=" >> $GITHUB_OUTPUT[0m
+2026-09-27T01:02:31.2944744Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-27T01:02:31.2945150Z env:
+2026-09-27T01:02:31.2945327Z   targets: 
+2026-09-27T01:02:31.2945503Z   components: 
+2026-09-27T01:02:31.2945695Z ##[endgroup]
+2026-09-27T01:02:31.3591175Z ##[end-action id=__dtolnay_rust-toolchain.flags;outcome=success;conclusion=success;duration_ms=81]
+2026-09-27T01:02:31.3594504Z ##[start-action display=Set $CARGO_HOME;id=__dtolnay_rust-toolchain.__run]
+2026-09-27T01:02:31.3724525Z ##[group]Run echo CARGO_HOME=${CARGO_HOME:-"$USERPROFILE\.cargo"} >> $GITHUB_ENV
+2026-09-27T01:02:31.3725038Z [36;1mecho CARGO_HOME=${CARGO_HOME:-"$USERPROFILE\.cargo"} >> $GITHUB_ENV[0m
+2026-09-27T01:02:31.3742089Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-27T01:02:31.3742506Z ##[endgroup]
+2026-09-27T01:02:31.4138976Z ##[end-action id=__dtolnay_rust-toolchain.__run;outcome=success;conclusion=success;duration_ms=54]
+2026-09-27T01:02:31.4143386Z ##[start-action display=Install rustup if needed;id=__dtolnay_rust-toolchain.__run_2]
+2026-09-27T01:02:31.4155569Z ##[end-action id=__dtolnay_rust-toolchain.__run_2;outcome=skipped;conclusion=skipped;duration_ms=0]
+2026-09-27T01:02:31.4157889Z ##[start-action display=Install rustup if needed on windows;id=__dtolnay_rust-toolchain.__run_3]
+2026-09-27T01:02:31.4292248Z ##[group]Run if ! command -v rustup &>/dev/null; then
+2026-09-27T01:02:31.4292611Z [36;1mif ! command -v rustup &>/dev/null; then[0m
+2026-09-27T01:02:31.4293389Z [36;1m  curl --proto '=https' --tlsv1.2 --retry 10 --retry-connrefused --location --silent --show-error --fail https://win.rustup.rs/x86_64 --output 'D:\a\_temp\rustup-init.exe'[0m
+2026-09-27T01:02:31.4294418Z [36;1m  'D:\a\_temp\rustup-init.exe' --default-toolchain none --no-modify-path -y[0m
+2026-09-27T01:02:31.4294836Z [36;1m  echo "$CARGO_HOME\bin" >> $GITHUB_PATH[0m
+2026-09-27T01:02:31.4295099Z [36;1mfi[0m
+2026-09-27T01:02:31.4311345Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-27T01:02:31.4311742Z env:
+2026-09-27T01:02:31.4311938Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-27T01:02:31.4312188Z ##[endgroup]
+2026-09-27T01:02:31.4955337Z ##[end-action id=__dtolnay_rust-toolchain.__run_3;outcome=success;conclusion=success;duration_ms=79]
+2026-09-27T01:02:31.4968469Z ##[start-action display=rustup toolchain install stable;id=__dtolnay_rust-toolchain.__run_4]
+2026-09-27T01:02:31.5105229Z ##[group]Run rustup toolchain install stable --profile minimal --no-self-update
+2026-09-27T01:02:31.5105769Z [36;1mrustup toolchain install stable --profile minimal --no-self-update[0m
+2026-09-27T01:02:31.5122101Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-27T01:02:31.5122503Z env:
+2026-09-27T01:02:31.5122700Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-27T01:02:31.5122971Z   RUSTUP_PERMIT_COPY_RENAME: 1
+2026-09-27T01:02:31.5123476Z ##[endgroup]
+2026-09-27T01:02:35.0834875Z info: syncing channel updates for stable-x86_64-pc-windows-msvc
+2026-09-27T01:02:35.5683548Z 
+2026-09-27T01:02:35.5879289Z   stable-x86_64-pc-windows-msvc unchanged - rustc 1.98.1 (48a229cea 2026-09-01)
+2026-09-27T01:02:35.5879688Z 
+2026-09-27T01:02:35.6018772Z ##[end-action id=__dtolnay_rust-toolchain.__run_4;outcome=success;conclusion=success;duration_ms=4104]
+2026-09-27T01:02:35.6026981Z ##[start-action display=rustup default stable;id=__dtolnay_rust-toolchain.__run_5]
+2026-09-27T01:02:35.6168693Z ##[group]Run rustup default stable
+2026-09-27T01:02:35.6168969Z [36;1mrustup default stable[0m
+2026-09-27T01:02:35.6184352Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-27T01:02:35.6184767Z env:
+2026-09-27T01:02:35.6184964Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-27T01:02:35.6185216Z ##[endgroup]
+2026-09-27T01:02:35.6913606Z info: using existing install for stable-x86_64-pc-windows-msvc
+2026-09-27T01:02:35.7017084Z info: default toolchain set to stable-x86_64-pc-windows-msvc
+2026-09-27T01:02:35.7019726Z 
+2026-09-27T01:02:35.7215151Z   stable-x86_64-pc-windows-msvc unchanged - rustc 1.98.1 (48a229cea 2026-09-01)
+2026-09-27T01:02:35.7215608Z 
+2026-09-27T01:02:35.7302280Z ##[end-action id=__dtolnay_rust-toolchain.__run_5;outcome=success;conclusion=success;duration_ms=127]
+2026-09-27T01:02:35.7304939Z ##[start-action display=Create cachekey;id=__dtolnay_rust-toolchain.rustc-version]
+2026-09-27T01:02:35.7439810Z ##[group]Run DATE=$(rustc +stable --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')
+2026-09-27T01:02:35.7440844Z [36;1mDATE=$(rustc +stable --version --verbose | sed -ne 's/^commit-date: \(20[0-9][0-9]\)-\([01][0-9]\)-\([0-3][0-9]\)$/\1\2\3/p')[0m
+2026-09-27T01:02:35.7441666Z [36;1mHASH=$(rustc +stable --version --verbose | sed -ne 's/^commit-hash: //p')[0m
+2026-09-27T01:02:35.7442263Z [36;1mecho "cachekey=$(echo $DATE$HASH | head -c12)" >> $GITHUB_OUTPUT[0m
+2026-09-27T01:02:35.7459360Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-27T01:02:35.7459771Z env:
+2026-09-27T01:02:35.7459961Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-27T01:02:35.7460212Z ##[endgroup]
+2026-09-27T01:02:36.6066509Z ##[end-action id=__dtolnay_rust-toolchain.rustc-version;outcome=success;conclusion=success;duration_ms=876]
+2026-09-27T01:02:36.6072781Z ##[start-action display=Disable incremental compilation;id=__dtolnay_rust-toolchain.__run_6]
+2026-09-27T01:02:36.6240031Z ##[group]Run if [ -z "${CARGO_INCREMENTAL+set}" ]; then
+2026-09-27T01:02:36.6240639Z [36;1mif [ -z "${CARGO_INCREMENTAL+set}" ]; then[0m
+2026-09-27T01:02:36.6241354Z [36;1m  echo CARGO_INCREMENTAL=0 >> $GITHUB_ENV[0m
+2026-09-27T01:02:36.6241810Z [36;1mfi[0m
+2026-09-27T01:02:36.6262129Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-27T01:02:36.6262777Z env:
+2026-09-27T01:02:36.6263090Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-27T01:02:36.6263533Z ##[endgroup]
+2026-09-27T01:02:36.6692933Z ##[end-action id=__dtolnay_rust-toolchain.__run_6;outcome=success;conclusion=success;duration_ms=61]
+2026-09-27T01:02:36.6695619Z ##[start-action display=Enable colors in Cargo output;id=__dtolnay_rust-toolchain.__run_7]
+2026-09-27T01:02:36.6834864Z ##[group]Run if [ -z "${CARGO_TERM_COLOR+set}" ]; then
+2026-09-27T01:02:36.6835212Z [36;1mif [ -z "${CARGO_TERM_COLOR+set}" ]; then[0m
+2026-09-27T01:02:36.6835527Z [36;1m  echo CARGO_TERM_COLOR=always >> $GITHUB_ENV[0m
+2026-09-27T01:02:36.6835804Z [36;1mfi[0m
+2026-09-27T01:02:36.6851133Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-27T01:02:36.6851540Z env:
+2026-09-27T01:02:36.6851731Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-27T01:02:36.6851988Z   CARGO_INCREMENTAL: 0
+2026-09-27T01:02:36.6852177Z ##[endgroup]
+2026-09-27T01:02:36.7247155Z ##[end-action id=__dtolnay_rust-toolchain.__run_7;outcome=success;conclusion=success;duration_ms=55]
+2026-09-27T01:02:36.7249488Z ##[start-action display=Enable Cargo sparse registry;id=__dtolnay_rust-toolchain.__run_8]
+2026-09-27T01:02:36.7393616Z ##[group]Run # implemented in 1.66, stabilized in 1.68, made default in 1.70
+2026-09-27T01:02:36.7394160Z [36;1m# implemented in 1.66, stabilized in 1.68, made default in 1.70[0m
+2026-09-27T01:02:36.7394795Z [36;1mif [ -z "${CARGO_REGISTRIES_CRATES_IO_PROTOCOL+set}" -o -f "D:\a\_temp"/.implicit_cargo_registries_crates_io_protocol ]; then[0m
+2026-09-27T01:02:36.7395442Z [36;1m  if rustc +stable --version --verbose | grep -q '^release: 1\.6[89]\.'; then[0m
+2026-09-27T01:02:36.7395929Z [36;1m    touch "D:\a\_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-09-27T01:02:36.7396410Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse >> $GITHUB_ENV[0m
+2026-09-27T01:02:36.7396878Z [36;1m  elif rustc +stable --version --verbose | grep -q '^release: 1\.6[67]\.'; then[0m
+2026-09-27T01:02:36.7397370Z [36;1m    touch "D:\a\_temp"/.implicit_cargo_registries_crates_io_protocol || true[0m
+2026-09-27T01:02:36.7397810Z [36;1m    echo CARGO_REGISTRIES_CRATES_IO_PROTOCOL=git >> $GITHUB_ENV[0m
+2026-09-27T01:02:36.7398127Z [36;1m  fi[0m
+2026-09-27T01:02:36.7398287Z [36;1mfi[0m
+2026-09-27T01:02:36.7413785Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-27T01:02:36.7414161Z env:
+2026-09-27T01:02:36.7414352Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-27T01:02:36.7414602Z   CARGO_INCREMENTAL: 0
+2026-09-27T01:02:36.7414802Z   CARGO_TERM_COLOR: always
+2026-09-27T01:02:36.7415008Z ##[endgroup]
+2026-09-27T01:02:36.9215528Z ##[end-action id=__dtolnay_rust-toolchain.__run_8;outcome=success;conclusion=success;duration_ms=196]
+2026-09-27T01:02:36.9218260Z ##[start-action display=Work around spurious network errors in curl 8.0;id=__dtolnay_rust-toolchain.__run_9]
+2026-09-27T01:02:36.9347387Z ##[group]Run # https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation
+2026-09-27T01:02:36.9348137Z [36;1m# https://rust-lang.zulipchat.com/#narrow/stream/246057-t-cargo/topic/timeout.20investigation[0m
+2026-09-27T01:02:36.9348729Z [36;1mif rustc +stable --version --verbose | grep -q '^release: 1\.7[01]\.'; then[0m
+2026-09-27T01:02:36.9349179Z [36;1m  echo CARGO_HTTP_MULTIPLEXING=false >> $GITHUB_ENV[0m
+2026-09-27T01:02:36.9349472Z [36;1mfi[0m
+2026-09-27T01:02:36.9364704Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-27T01:02:36.9365089Z env:
+2026-09-27T01:02:36.9365276Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-27T01:02:36.9365525Z   CARGO_INCREMENTAL: 0
+2026-09-27T01:02:36.9366475Z   CARGO_TERM_COLOR: always
+2026-09-27T01:02:36.9366682Z ##[endgroup]
+2026-09-27T01:02:37.0351092Z ##[end-action id=__dtolnay_rust-toolchain.__run_9;outcome=success;conclusion=success;duration_ms=113]
+2026-09-27T01:02:37.0355086Z ##[start-action display=rustc +stable --version --verbose;id=__dtolnay_rust-toolchain.__run_10]
+2026-09-27T01:02:37.0491732Z ##[group]Run rustc +stable --version --verbose
+2026-09-27T01:02:37.0492299Z [36;1mrustc +stable --version --verbose[0m
+2026-09-27T01:02:37.0515907Z shell: C:\Program Files\Git\bin\bash.EXE --noprofile --norc -e -o pipefail {0}
+2026-09-27T01:02:37.0516557Z env:
+2026-09-27T01:02:37.0516854Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-27T01:02:37.0517279Z   CARGO_INCREMENTAL: 0
+2026-09-27T01:02:37.0517609Z   CARGO_TERM_COLOR: always
+2026-09-27T01:02:37.0517943Z ##[endgroup]
+2026-09-27T01:02:37.1356752Z rustc 1.98.1 (48a229cea 2026-09-01)
+2026-09-27T01:02:37.1357298Z binary: rustc
+2026-09-27T01:02:37.1357704Z commit-hash: 48a229ceaefd4985c50990b14116b6d856af0985
+2026-09-27T01:02:37.1358239Z commit-date: 2026-09-01
+2026-09-27T01:02:37.1358586Z host: x86_64-pc-windows-msvc
+2026-09-27T01:02:37.1358971Z release: 1.98.1
+2026-09-27T01:02:37.1359278Z LLVM version: 22.1.8
+2026-09-27T01:02:37.1475723Z ##[end-action id=__dtolnay_rust-toolchain.__run_10;outcome=success;conclusion=success;duration_ms=111]
+2026-09-27T01:02:37.1658830Z ##[group]Run cargo build --release --locked
+2026-09-27T01:02:37.1659247Z [36;1mcargo build --release --locked[0m
+2026-09-27T01:02:37.2354459Z shell: C:\Program Files\PowerShell\7\pwsh.EXE -command ". '{0}'"
+2026-09-27T01:02:37.2354836Z env:
+2026-09-27T01:02:37.2355047Z   CARGO_HOME: C:\Users\runneradmin\.cargo
+2026-09-27T01:02:37.2355339Z   CARGO_INCREMENTAL: 0
+2026-09-27T01:02:37.2355569Z   CARGO_TERM_COLOR: always
+2026-09-27T01:02:37.2355800Z ##[endgroup]
+2026-09-27T01:02:40.4468542Z [1m[92m    Updating[0m crates.io index
+2026-09-27T01:02:41.1044674Z [1m[92m Downloading[0m crates ...
+2026-09-27T01:02:41.1764599Z [1m[92m  Downloaded[0m windows-result v0.2.0
+2026-09-27T01:02:41.2536337Z [1m[92m  Downloaded[0m quote v1.0.47
+2026-09-27T01:02:41.2848645Z [1m[92m  Downloaded[0m windows-targets v0.52.6
+2026-09-27T01:02:41.2966025Z [1m[92m  Downloaded[0m proc-macro2 v1.0.107
+2026-09-27T01:02:41.3324441Z [1m[92m  Downloaded[0m windows-interface v0.58.0
+2026-09-27T01:02:41.3396050Z [1m[92m  Downloaded[0m unicode-ident v1.0.26
+2026-09-27T01:02:41.3673316Z [1m[92m  Downloaded[0m windows-implement v0.58.0
+2026-09-27T01:02:41.3753386Z [1m[92m  Downloaded[0m windows-strings v0.1.0
+2026-09-27T01:02:41.3904183Z [1m[92m  Downloaded[0m windows-core v0.58.0
+2026-09-27T01:02:41.4240848Z [1m[92m  Downloaded[0m syn v2.0.119
+2026-09-27T01:02:41.5362646Z [1m[92m  Downloaded[0m windows_x86_64_msvc v0.52.6
+2026-09-27T01:02:41.5590308Z [1m[92m  Downloaded[0m windows v0.58.0
+2026-09-27T01:02:44.1786388Z [1m[92m   Compiling[0m proc-macro2 v1.0.107
+2026-09-27T01:02:44.1787989Z [1m[92m   Compiling[0m unicode-ident v1.0.26
+2026-09-27T01:02:44.1788839Z [1m[92m   Compiling[0m windows_x86_64_msvc v0.52.6
+2026-09-27T01:02:44.1789295Z [1m[92m   Compiling[0m quote v1.0.47
+2026-09-27T01:02:54.9987592Z [1m[92m   Compiling[0m windows-targets v0.52.6
+2026-09-27T01:02:55.0959721Z [1m[92m   Compiling[0m windows-result v0.2.0
+2026-09-27T01:02:56.5544606Z [1m[92m   Compiling[0m windows-strings v0.1.0
+2026-09-27T01:02:57.5889180Z [1m[92m   Compiling[0m syn v2.0.119
+2026-09-27T01:03:00.4780496Z [1m[92m   Compiling[0m windows-implement v0.58.0
+2026-09-27T01:03:00.4781353Z [1m[92m   Compiling[0m windows-interface v0.58.0
+2026-09-27T01:03:01.3022561Z [1m[92m   Compiling[0m windows-core v0.58.0
+2026-09-27T01:03:01.7431200Z [1m[92m   Compiling[0m windows v0.58.0
+2026-09-27T01:03:23.2806805Z [1m[92m   Compiling[0m tbg-lite v0.1.0 (D:\a\taskbar-grouping\taskbar-grouping)
+2026-09-27T01:03:23.3358997Z [1m[91merror[0m[1m[97m: expected one of `.`, `;`, `?`, `else`, or an operator, found `}`[0m
+2026-09-27T01:03:23.3360534Z    [1m[96m--> [0msrc\watchpid.rs:156:46
+2026-09-27T01:03:23.3361203Z     [1m[96m|[0m
+2026-09-27T01:03:23.3361943Z [1m[96m156[0m [1m[96m|[0m         unsafe { let _ = CloseHandle(self.0) };
+2026-09-27T01:03:23.3363216Z     [1m[96m|[0m                                              [1m[91m^[0m [1m[91mexpected one of `.`, `;`, `?`, `else`, or an operator[0m
+2026-09-27T01:03:23.3364003Z 
+2026-09-27T01:03:23.3364604Z [1m[91merror[0m[1m[97m: expected one of `.`, `;`, `?`, `else`, or an operator, found `}`[0m
+2026-09-27T01:03:23.3365647Z    [1m[96m--> [0msrc\watchpid.rs:175:37
+2026-09-27T01:03:23.3366246Z     [1m[96m|[0m
+2026-09-27T01:03:23.3366869Z [1m[96m175[0m [1m[96m|[0m     unsafe { let _ = CloseHandle(h) };
+2026-09-27T01:03:23.3368106Z     [1m[96m|[0m                                     [1m[91m^[0m [1m[91mexpected one of `.`, `;`, `?`, `else`, or an operator[0m
+2026-09-27T01:03:23.3368915Z 
+2026-09-27T01:03:23.3369534Z [1m[91merror[0m[1m[97m: expected one of `.`, `;`, `?`, `else`, or an operator, found `}`[0m
+2026-09-27T01:03:23.3370554Z    [1m[96m--> [0msrc\watchpid.rs:187:37
+2026-09-27T01:03:23.3371089Z     [1m[96m|[0m
+2026-09-27T01:03:23.3371763Z [1m[96m187[0m [1m[96m|[0m     unsafe { let _ = CloseHandle(h) };
+2026-09-27T01:03:23.3375437Z     [1m[96m|[0m                                     [1m[91m^[0m [1m[91mexpected one of `.`, `;`, `?`, `else`, or an operator[0m
+2026-09-27T01:03:23.3376457Z 
+2026-09-27T01:03:23.3377021Z [1m[91merror[0m[1m[97m: expected one of `.`, `;`, `?`, `else`, or an operator, found `}`[0m
+2026-09-27T01:03:23.3377825Z    [1m[96m--> [0msrc\watchpid.rs:203:42
+2026-09-27T01:03:23.3378292Z     [1m[96m|[0m
+2026-09-27T01:03:23.3378838Z [1m[96m203[0m [1m[96m|[0m     unsafe { let _ = CloseHandle(handle) };
+2026-09-27T01:03:23.3379921Z     [1m[96m|[0m                                          [1m[91m^[0m [1m[91mexpected one of `.`, `;`, `?`, `else`, or an operator[0m
+2026-09-27T01:03:23.3380556Z 
+2026-09-27T01:03:23.3860003Z [1m[91merror[0m[1m[97m: requires at least a format string argument[0m
+2026-09-27T01:03:23.3860605Z    [1m[96m--> [0msrc\console.rs:271:35
+2026-09-27T01:03:23.3861029Z     [1m[96m|[0m
+2026-09-27T01:03:23.3865671Z [1m[96m271[0m [1m[96m|[0m         $crate::console::out_line(format_args!($($arg)*))
+2026-09-27T01:03:23.3866224Z     [1m[96m|[0m                                   [1m[91m^^^^^^^^^^^^^^^^^^^^^^[0m
+2026-09-27T01:03:23.3866568Z     [1m[96m|[0m
+2026-09-27T01:03:23.3866859Z    [1m[96m::: [0msrc\menu.rs:699:5
+2026-09-27T01:03:23.3867118Z     [1m[96m|[0m
+2026-09-27T01:03:23.3867350Z [1m[96m699[0m [1m[96m|[0m     outln!();
+2026-09-27T01:03:23.3867744Z     [1m[96m|[0m     [1m[96m--------[0m [1m[96min this macro invocation[0m
+2026-09-27T01:03:23.3868093Z     [1m[96m|[0m
+2026-09-27T01:03:23.3868888Z     [1m[96m= [0m[1m[97mnote[0m: this error originates in the macro `format_args` which comes from the expansion of the macro `outln` (in Nightly builds, run with -Z macro-backtrace for more info)
+2026-09-27T01:03:23.3869562Z 
+2026-09-27T01:03:23.3913132Z [1m[91merror[0m[1m[97m: requires at least a format string argument[0m
+2026-09-27T01:03:23.3913853Z    [1m[96m--> [0msrc\console.rs:271:35
+2026-09-27T01:03:23.3914308Z     [1m[96m|[0m
+2026-09-27T01:03:23.3915088Z [1m[96m271[0m [1m[96m|[0m         $crate::console::out_line(format_args!($($arg)*))
+2026-09-27T01:03:23.3917011Z     [1m[96m|[0m                                   [1m[91m^^^^^^^^^^^^^^^^^^^^^^[0m
+2026-09-27T01:03:23.3917816Z     [1m[96m|[0m
+2026-09-27T01:03:23.3918321Z    [1m[96m::: [0msrc\menu.rs:751:13
+2026-09-27T01:03:23.3918636Z     [1m[96m|[0m
+2026-09-27T01:03:23.3918961Z [1m[96m751[0m [1m[96m|[0m             outln!();
+2026-09-27T01:03:23.3919867Z     [1m[96m|[0m             [1m[96m--------[0m [1m[96min this macro invocation[0m
+2026-09-27T01:03:23.3921109Z     [1m[96m|[0m
+2026-09-27T01:03:23.3922219Z     [1m[96m= [0m[1m[97mnote[0m: this error originates in the macro `format_args` which comes from the expansion of the macro `outln` (in Nightly builds, run with -Z macro-backtrace for more info)
+2026-09-27T01:03:23.3923306Z 
+2026-09-27T01:03:23.3924019Z [1m[91merror[0m[1m[97m: requires at least a format string argument[0m
+2026-09-27T01:03:23.3924823Z    [1m[96m--> [0msrc\console.rs:271:35
+2026-09-27T01:03:23.3925312Z     [1m[96m|[0m
+2026-09-27T01:03:23.3926062Z [1m[96m271[0m [1m[96m|[0m         $crate::console::out_line(format_args!($($arg)*))
+2026-09-27T01:03:23.3926932Z     [1m[96m|[0m                                   [1m[91m^^^^^^^^^^^^^^^^^^^^^^[0m
+2026-09-27T01:03:23.3927525Z     [1m[96m|[0m
+2026-09-27T01:03:23.3927999Z    [1m[96m::: [0msrc\menu.rs:779:21
+2026-09-27T01:03:23.3928461Z     [1m[96m|[0m
+2026-09-27T01:03:23.3928932Z [1m[96m779[0m [1m[96m|[0m                     outln!();
+2026-09-27T01:03:23.3929847Z     [1m[96m|[0m                     [1m[96m--------[0m [1m[96min this macro invocation[0m
+2026-09-27T01:03:23.3930534Z     [1m[96m|[0m
+2026-09-27T01:03:23.3933094Z     [1m[96m= [0m[1m[97mnote[0m: this error originates in the macro `format_args` which comes from the expansion of the macro `outln` (in Nightly builds, run with -Z macro-backtrace for more info)
+2026-09-27T01:03:23.3934759Z 
+2026-09-27T01:03:23.3935234Z [1m[91merror[0m[1m[97m: requires at least a format string argument[0m
+2026-09-27T01:03:23.3935994Z    [1m[96m--> [0msrc\console.rs:271:35
+2026-09-27T01:03:23.3936467Z     [1m[96m|[0m
+2026-09-27T01:03:23.3937197Z [1m[96m271[0m [1m[96m|[0m         $crate::console::out_line(format_args!($($arg)*))
+2026-09-27T01:03:23.3938042Z     [1m[96m|[0m                                   [1m[91m^^^^^^^^^^^^^^^^^^^^^^[0m
+2026-09-27T01:03:23.3938639Z     [1m[96m|[0m
+2026-09-27T01:03:23.3939089Z    [1m[96m::: [0msrc\menu.rs:822:21
+2026-09-27T01:03:23.3939562Z     [1m[96m|[0m
+2026-09-27T01:03:23.3940025Z [1m[96m822[0m [1m[96m|[0m                     outln!();
+2026-09-27T01:03:23.3940819Z     [1m[96m|[0m                     [1m[96m--------[0m [1m[96min this macro invocation[0m
+2026-09-27T01:03:23.3941489Z     [1m[96m|[0m
+2026-09-27T01:03:23.3942869Z     [1m[96m= [0m[1m[97mnote[0m: this error originates in the macro `format_args` which comes from the expansion of the macro `outln` (in Nightly builds, run with -Z macro-backtrace for more info)
+2026-09-27T01:03:23.3944070Z 
+2026-09-27T01:03:23.3944521Z [1m[91merror[0m[1m[97m: requires at least a format string argument[0m
+2026-09-27T01:03:23.3945213Z    [1m[96m--> [0msrc\console.rs:271:35
+2026-09-27T01:03:23.3945654Z     [1m[96m|[0m
+2026-09-27T01:03:23.3946325Z [1m[96m271[0m [1m[96m|[0m         $crate::console::out_line(format_args!($($arg)*))
+2026-09-27T01:03:23.3947162Z     [1m[96m|[0m                                   [1m[91m^^^^^^^^^^^^^^^^^^^^^^[0m
+2026-09-27T01:03:23.3947752Z     [1m[96m|[0m
+2026-09-27T01:03:23.3948195Z    [1m[96m::: [0msrc\menu.rs:850:29
+2026-09-27T01:03:23.3948635Z     [1m[96m|[0m
+2026-09-27T01:03:23.3949155Z [1m[96m850[0m [1m[96m|[0m [1m[96m...[0m                   outln!();
+2026-09-27T01:03:23.3950024Z     [1m[96m|[0m                       [1m[96m--------[0m [1m[96min this macro invocation[0m
+2026-09-27T01:03:23.3950685Z     [1m[96m|[0m
+2026-09-27T01:03:23.3952653Z     [1m[96m= [0m[1m[97mnote[0m: this error originates in the macro `format_args` which comes from the expansion of the macro `outln` (in Nightly builds, run with -Z macro-backtrace for more info)
+2026-09-27T01:03:23.3953494Z 
+2026-09-27T01:03:23.4719065Z [1m[93mwarning[0m[1m[97m: unused import: `CloseHandle`[0m
+2026-09-27T01:03:23.4719929Z   [1m[96m--> [0msrc\watchpid.rs:27:34
+2026-09-27T01:03:23.4720356Z    [1m[96m|[0m
+2026-09-27T01:03:23.4721067Z [1m[96m27[0m [1m[96m|[0m use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
+2026-09-27T01:03:23.4722100Z    [1m[96m|[0m                                  [1m[93m^^^^^^^^^^^[0m
+2026-09-27T01:03:23.4722552Z    [1m[96m|[0m
+2026-09-27T01:03:23.4723094Z    [1m[96m= [0m[1m[97mnote[0m: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+2026-09-27T01:03:23.4723582Z 
+2026-09-27T01:03:23.8185488Z [1m[93mwarning[0m[1m[97m: variable does not need to be mutable[0m
+2026-09-27T01:03:23.8186123Z   [1m[96m--> [0msrc\menu.rs:57:22
+2026-09-27T01:03:23.8186483Z    [1m[96m|[0m
+2026-09-27T01:03:23.8186977Z [1m[96m57[0m [1m[96m|[0m     fn stop_and_join(mut self) -> Result<(), String> {
+2026-09-27T01:03:23.8187636Z    [1m[96m|[0m                      [1m[96m----[0m[1m[93m^^^^[0m
+2026-09-27T01:03:23.8188139Z    [1m[96m|[0m                      [1m[96m|[0m
+2026-09-27T01:03:23.8188642Z    [1m[96m|[0m                      [1m[96mhelp: remove this `mut`[0m
+2026-09-27T01:03:23.8189099Z    [1m[96m|[0m
+2026-09-27T01:03:23.8189647Z    [1m[96m= [0m[1m[97mnote[0m: `#[warn(unused_mut)]` (part of `#[warn(unused)]`) on by default
+2026-09-27T01:03:23.8190124Z 
+2026-09-27T01:03:23.9747377Z [1m[93mwarning[0m[1m[97m: unnecessary `unsafe` block[0m
+2026-09-27T01:03:23.9748198Z    [1m[96m--> [0msrc\main.rs:538:21
+2026-09-27T01:03:23.9748563Z     [1m[96m|[0m
+2026-09-27T01:03:23.9748871Z [1m[96m533[0m [1m[96m|[0m     unsafe {
+2026-09-27T01:03:23.9749458Z     [1m[96m|[0m     [1m[96m------[0m [1m[96mbecause it's nested under this `unsafe` block[0m
+2026-09-27T01:03:23.9749990Z [1m[96m...[0m
+2026-09-27T01:03:23.9750645Z [1m[96m538[0m [1m[96m|[0m             None => unsafe { winutil::enum_top_level_windows()? },
+2026-09-27T01:03:23.9751316Z     [1m[96m|[0m                     [1m[93m^^^^^^[0m [1m[93munnecessary `unsafe` block[0m
+2026-09-27T01:03:23.9751766Z     [1m[96m|[0m
+2026-09-27T01:03:23.9752299Z     [1m[96m= [0m[1m[97mnote[0m: `#[warn(unused_unsafe)]` (part of `#[warn(unused)]`) on by default
+2026-09-27T01:03:23.9752719Z 
+2026-09-27T01:03:24.0451358Z [1m[93mwarning[0m: `tbg-lite` (bin "tbg-lite") generated 3 warnings
+2026-09-27T01:03:24.0454291Z [1m[91merror[0m: could not compile `tbg-lite` (bin "tbg-lite") due to 9 previous errors; 3 warnings emitted
+2026-09-27T01:03:24.1764672Z ##[error]Process completed with exit code 1.
+2026-09-27T01:03:24.2021878Z Post job cleanup.
+2026-09-27T01:03:24.4062307Z [command]"C:\Program Files\Git\bin\git.exe" version
+2026-09-27T01:03:24.4443954Z git version 2.55.0.windows.5
+2026-09-27T01:03:24.4530473Z Temporarily overriding HOME='D:\a\_temp\dc6d8cb8-fe07-4cbf-93eb-e930537a0232' before making global git config changes
+2026-09-27T01:03:24.4531787Z Adding repository directory to the temporary git global config as a safe directory
+2026-09-27T01:03:24.4545232Z [command]"C:\Program Files\Git\bin\git.exe" config --global --add safe.directory D:\a\taskbar-grouping\taskbar-grouping
+2026-09-27T01:03:24.4900698Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp core\.sshCommand
+2026-09-27T01:03:24.5217930Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :\""
+2026-09-27T01:03:25.0767088Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-09-27T01:03:25.1043261Z http.https://github.com/.extraheader
+2026-09-27T01:03:25.1088275Z [command]"C:\Program Files\Git\bin\git.exe" config --local --unset-all http.https://github.com/.extraheader
+2026-09-27T01:03:25.1384187Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "sh -c \"git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :\""
+2026-09-27T01:03:25.6815460Z [command]"C:\Program Files\Git\bin\git.exe" config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-09-27T01:03:25.7105708Z [command]"C:\Program Files\Git\bin\git.exe" submodule foreach --recursive "git config --local --show-origin --name-only --get-regexp remote.origin.url"
+2026-09-27T01:03:26.2525462Z Cleaning up orphan processes
+2026-09-27T01:03:26.2725118Z Terminate orphan process: pid (6984) (vctip)
+2026-09-27T01:03:26.2804414Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/checkout@11d5960a326750d5838078e36cf38b85af677262. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/
