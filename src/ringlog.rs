@@ -73,15 +73,15 @@ impl RingLog {
             let _ = f.write_all(line.as_bytes());
             let _ = f.flush();
         }
-        // 截半：超上限 → 保留后半段（tmp + rename 原子替换）
+        // 截半：超上限 → 保留后半段。任务 43（审查 O）：复用
+        // `restoremap::atomic_write`（tmp + sync + rename 原子替换，与
+        // 还原表/health/watchpid 同一纪律）——截半窗口期崩溃不再可能
+        // 留下半行残文/空文件
         if let Ok(md) = fs::metadata(path) {
             if md.len() > MAX_BYTES {
                 if let Ok(content) = fs::read_to_string(path) {
                     let keep = trim_keep_tail(&content, (content.len() as u64) / 2);
-                    let tmp = PathBuf::from(format!("{}.tmp", path.display()));
-                    if fs::write(&tmp, keep).is_ok() {
-                        let _ = fs::rename(&tmp, path);
-                    }
+                    let _ = crate::restoremap::atomic_write(path, keep);
                 }
             }
         }

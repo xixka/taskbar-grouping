@@ -63,7 +63,12 @@ fn exe_dir() -> Result<PathBuf, String> {
 }
 
 fn tmp_path(path: &Path) -> PathBuf {
-    PathBuf::from(format!("{}.tmp", path.display()))
+    // 任务 43（审查 N）：OsString 拼接（不经 display() 的有损往返，
+    // 非 UTF-8 路径字节原样保留）；随 atomic_write 提升为唯一临时文件
+    // 构造点（ringlog 截半也复用）
+    let mut s = path.as_os_str().to_os_string();
+    s.push(".tmp");
+    PathBuf::from(s)
 }
 
 /// 原子写（审计 BUG-03）：同目录临时文件 + fsync + rename 原子替换。
