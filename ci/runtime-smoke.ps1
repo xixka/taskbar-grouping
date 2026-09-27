@@ -534,22 +534,24 @@ try {
 
   # --- line 1 (default ungroup) ---
   $exeReal = (Resolve-Path $exe).Path
-  $cmd1 = '"' + $exeReal + '" watch --strategy ungroup --duration 0'
+  # Task 40 (review Q): the registered tail now carries --background
+  # (detached: FreeConsole + NUL stdio + ring log; tbg-lite stop-able)
+  $cmd1 = '"' + $exeReal + '" watch --strategy ungroup --duration 0 --background'
   $install1 = & $exe install | Out-String
   Assert (($LASTEXITCODE -eq 0) -and ($install1 -cmatch 'autostart registered')) 'install: line-1 install exits 0 and reports registration'
   $reg1 = (Get-ItemProperty -Path $runKeyPath -Name 'tbg-lite' -ErrorAction SilentlyContinue).'tbg-lite'
   Assert ($reg1 -eq $cmd1) "install: HKCU Run value data matches the line-1 command exactly (got: $reg1)"
   $st1 = & $exe status | Out-String
-  Assert (($LASTEXITCODE -eq 0) -and ($st1 -cmatch 'autostart\s*:\s*installed') -and ($st1 -cmatch [regex]::Escape('--strategy ungroup --duration 0'))) 'status: reports installed with the line-1 ungroup command'
+  Assert (($LASTEXITCODE -eq 0) -and ($st1 -cmatch 'autostart\s*:\s*installed') -and ($st1 -cmatch [regex]::Escape('--strategy ungroup --duration 0 --background'))) 'status: reports installed with the line-1 ungroup command'
 
   # --- line 2 (group) overwrites the value ---
-  $cmd2 = '"' + $exeReal + '" watch --strategy group --group smoke --duration 0'
+  $cmd2 = '"' + $exeReal + '" watch --strategy group --group smoke --duration 0 --background'
   $install2 = & $exe install --strategy group --group smoke | Out-String
   Assert (($LASTEXITCODE -eq 0) -and ($install2 -cmatch 'autostart updated')) 'install: line-2 re-install reports overwrite (updated)'
   $reg2 = (Get-ItemProperty -Path $runKeyPath -Name 'tbg-lite' -ErrorAction SilentlyContinue).'tbg-lite'
   Assert ($reg2 -eq $cmd2) "install: HKCU Run value switched to the line-2 group command (got: $reg2)"
   $st2 = & $exe status | Out-String
-  Assert (($LASTEXITCODE -eq 0) -and ($st2 -cmatch [regex]::Escape('--strategy group --group smoke --duration 0'))) 'status: reports the line-2 group command'
+  Assert (($LASTEXITCODE -eq 0) -and ($st2 -cmatch [regex]::Escape('--strategy group --group smoke --duration 0 --background'))) 'status: reports the line-2 group command'
 
   # --- uninstall (verified idempotent) ---
   $un = & $exe uninstall | Out-String

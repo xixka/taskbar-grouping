@@ -54,6 +54,53 @@ pub(crate) fn install_ctrl_handler() -> bool {
     unsafe { SetConsoleCtrlHandler(Some(console_ctrl_handler), true).is_ok() }
 }
 
+/// 任务 40（审查 P1-Q，2026-09-25）：`--background` 自脱离。
+///
+/// 现象：`install` 注册的 `watch --duration 0` 登录时被 explorer 拉起，
+/// **分配一个可见 conhost 窗口**常驻任务栏（莫名黑窗 + 点 X = 杀
+/// watch，功能静默失效）。
+///
+/// 修复：stdout/stderr 先 `SetStdHandle` 重定向到 NUL 设备，再
+/// `FreeConsole` 脱离控制台（从真控制台启动时黑窗仅一闪）。
+/// 关键顺序约束：
+/// - `SetStdHandle` 必须发生在**任何 stdout/stderr 输出之前**——Rust
+///   std 惰性缓存 stdio 句柄（首写取 `GetStdHandle` 后不再查询），先
+///   输出后重定向无效；
+/// - `println!` 写 NUL 恒成功，不会触发 "failed printing to stdout"
+///   panic 路径（BUG-09 钩子不受扰动）；
+/// - `FreeConsole` 对无控制台进程（CREATE_NO_WINDOW）报错——静默
+///   忽略（`let _ =`，正是期望状态）；
+/// - NUL 句柄 `mem::forget` 不回收：句柄须存活至进程结束，drop 会把
+///   `SetStdHandle` 指向的底层句柄关闭。
+/// 事件轨迹由环形日志承担（`--background` 恒开，256 KiB 有界）。
+pub(crate) fn detach_console() -> Result<(), String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::Console::{
+        FreeConsole, SetStdHandle, STD_ERROR_HANDLE, STD_OUTPUT_HANDLE,
+    };
+
+    let open_nul = || {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open("NUL")
+            .map_err(|e| format!("background: cannot open the NUL device: {e}"))
+    };
+    let out = open_nul()?;
+    let err = open_nul()?;
+    unsafe {
+        SetStdHandle(STD_OUTPUT_HANDLE, HANDLE(out.as_raw_handle()))
+            .map_err(|e| format!("background: redirect stdout failed: {e}"))?;
+        SetStdHandle(STD_ERROR_HANDLE, HANDLE(err.as_raw_handle()))
+            .map_err(|e| format!("background: redirect stderr failed: {e}"))?;
+    }
+    std::mem::forget(out);
+    std::mem::forget(err);
+    // 已无控制台（CREATE_NO_WINDOW 启动）时失败——正是期望状态
+    let _ = unsafe { FreeConsole() };
+    Ok(())
+}
+
 /// 处理器：只做原子写。`BOOL(1)` = 已处理（抑制默认终止）。
 unsafe extern "system" fn console_ctrl_handler(event: u32) -> BOOL {
     match event {

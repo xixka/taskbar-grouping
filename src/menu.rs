@@ -102,18 +102,22 @@ fn is_keep(line: &str) -> bool {
     )
 }
 
-/// 任务 31：分离式后台重启 watch 子进程（`[0]` 退出选 `k`）。
+/// 任务 31/37/40：分离式后台重启 watch 子进程（`[0]` 退出选 `k`）。
 ///
 /// **必须在 `stop_and_join` 之后调用**：`Local\tbg-lite.map` 互斥体随
 /// watch 线程结束 Drop 释放（group 线路），先停后启保证子进程拿得到
 /// 互斥体（审计 BUG-02 单实例红线）。
 ///
-/// 子进程形态 = 纯 CLI `watch --duration 0`（常驻直至被杀；参数与菜单
-/// 线路同构）。无控制台窗口（CREATE_NO_WINDOW + 独立进程组，不受父
-/// 进程退出/Ctrl+C 影响）；stdout/stderr 追加到
-/// `%LOCALAPPDATA%\tbg-lite\tbg-background.log`——CREATE_NO_WINDOW 的
-/// 隐式 stdout 是无效句柄，`println!` 写失败会 panic 杀死后台进程，必须
-/// 显式给出口（打不开则回退 NUL 设备，丢弃日志但进程存活）。
+/// 子进程形态 = CLI `watch --duration 0 --background`（常驻；参数与
+/// 菜单线路同构）。`--background`（任务 40，审查 Q/R）让子进程自行把
+/// stdout/stderr 归 NUL + 脱离控制台 + 恒开环形日志（256 KiB 有界，
+/// 取代旧的无界 tbg-background.log 重定向，CREATE_NO_WINDOW 的隐式
+/// stdout 无效句柄 panic 问题一并消除）；CREATE_NO_WINDOW + 独立
+/// 进程组保证无可见窗口、不受父进程退出/Ctrl+C 影响。
+///
+/// 任务 37（审查 D）：子进程就绪后自登记 `tbg-watch.tsv` 并监听
+/// `Local\tbg-lite.stop.<pid>`——`tbg-lite stop` 与菜单 `[3]` 都能停它
+/// （旧提示"用 [3] 停止"从此为真）。
 fn spawn_detached_watch(
     strategy: WatchStrategy,
     group_name: Option<&str>,
@@ -131,42 +135,23 @@ fn spawn_detached_watch(
         })
         // CLI 默认 duration=60s；后台保活必须显式常驻
         .arg("--duration")
-        .arg("0");
+        .arg("0")
+        // 任务 37/40：后台模式（自脱离 + 环形日志 + PID 登记 + 停止事件）
+        .arg("--background");
     if let Some(name) = group_name {
         cmd.arg("--group").arg(name);
     }
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
-    // 显式 stdio：日志文件优先，回退 NUL（见函数注释）
-    if let Some(log) = background_log() {
-        let log_err = log
-            .try_clone()
-            .map_err(|e| format!("cannot duplicate background log handle: {e}"))?;
-        cmd.stdout(std::process::Stdio::from(log));
-        cmd.stderr(std::process::Stdio::from(log_err));
-    } else {
-        cmd.stdout(std::process::Stdio::null());
-        cmd.stderr(std::process::Stdio::null());
-    }
+    // stdio 不再由父进程接管：子进程 --background 在任何输出发生前
+    // SetStdHandle 归 NUL（Rust std 惰性缓存句柄，先重定向后首写）
     let child = cmd
         .spawn()
         .map_err(|e| format!("background watch spawn failed: {e}"))?;
     // 分离：不持有句柄、不等待（Windows 下 drop Child 不杀进程）；
-    // 返回 pid 供提示。之后用 `tbg-lite` 菜单 [3]/任务管理器结束。
+    // 返回 pid 供提示。停止途径：`tbg-lite stop` / 菜单 [3]（任务 37）
     Ok(child.id())
-}
-
-/// 后台保活日志文件（append）。目录沿用映射表数据目录
-/// `%LOCALAPPDATA%\tbg-lite`；任何失败返回 None（调用方回退 NUL）。
-fn background_log() -> Option<std::fs::File> {
-    let dir = crate::restoremap::data_dir().ok()?;
-    std::fs::create_dir_all(&dir).ok()?;
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("tbg-background.log"))
-        .ok()
 }
 
 /// 剥离行首 UTF-8 BOM（U+FEFF）——它不是 `trim()` 语义的空白，
@@ -496,6 +481,61 @@ impl L10n {
         }
     }
 
+    /// 任务 37（D）：[3] 同时停掉后台保活实例的结果文案。
+    fn background_watch_result(&self, r: crate::watchpid::StopResult) -> String {
+        use crate::watchpid::StopResult;
+        match self.lang {
+            Lang::En => match r {
+                StopResult::NoWatch => String::new(),
+                StopResult::StaleCleared { pid } => {
+                    format!("menu: background watch (pid {pid}) was not running — stale entry removed")
+                }
+                StopResult::Graceful { pid } => {
+                    format!("menu: background watch stopped gracefully (pid {pid})")
+                }
+                StopResult::TerminatedNoEvent { pid } => {
+                    format!("menu: background watch (pid {pid}) unreachable — terminated")
+                }
+                StopResult::TerminatedTimeout { pid } => {
+                    format!("menu: background watch (pid {pid}) stopped after timeout (terminated)")
+                }
+                StopResult::Failed { pid } => {
+                    format!("menu: could not stop the background watch (pid {pid}) — try taskkill")
+                }
+            },
+            Lang::Zh => match r {
+                StopResult::NoWatch => String::new(),
+                StopResult::StaleCleared { pid } => {
+                    format!("menu：后台 watch（pid {pid}）未在运行——已清除陈旧登记")
+                }
+                StopResult::Graceful { pid } => {
+                    format!("menu：后台 watch 已优雅停止（pid {pid}）")
+                }
+                StopResult::TerminatedNoEvent { pid } => {
+                    format!("menu：后台 watch（pid {pid}）停止事件不可达——已直接终止")
+                }
+                StopResult::TerminatedTimeout { pid } => {
+                    format!("menu：后台 watch（pid {pid}）超时后被终止")
+                }
+                StopResult::Failed { pid } => {
+                    format!("menu：无法停止后台 watch（pid {pid}）——请尝试 taskkill")
+                }
+            },
+        }
+    }
+
+    /// 任务 37（D）：菜单横幅的后台实例提示行。
+    fn status_background_running(&self, pid: u32) -> String {
+        match self.lang {
+            Lang::En => format!(
+                "background watch running (pid {pid}) — [3] or 'tbg-lite stop' stops it"
+            ),
+            Lang::Zh => format!(
+                "后台 watch 运行中（pid {pid}）——[3] 或 'tbg-lite stop' 可停止"
+            ),
+        }
+    }
+
     fn stop_first_restore(&self) -> &'static str {
         match self.lang {
             Lang::En => {
@@ -648,6 +688,15 @@ fn print_menu(loc: &L10n, running: Option<&WatchSession>) {
     } else {
         println!("{}", loc.status_not_running());
     }
+    // 任务 37（D）：后台保活实例（[0]→k / install 自启）存在时提示
+    // （陈旧登记静默回收——菜单不当告警员）
+    if let Some(info) = crate::watchpid::read() {
+        if crate::watchpid::is_running(info.pid) {
+            println!("{}", loc.status_background_running(info.pid));
+        } else {
+            crate::watchpid::clear(info.pid);
+        }
+    }
     println!("{}", loc.item1());
     println!("{}", loc.item2());
     println!("{}", loc.item3());
@@ -733,13 +782,23 @@ pub(crate) fn run() -> ExitCode {
                 ));
                 println!("{}", loc.watch_started_group(name));
             }
-            "3" => match session.take() {
-                Some(s) => match s.stop_and_join() {
-                    Ok(()) => println!("{}", loc.watch_stopped_kept()),
-                    Err(e) => println!("{}", loc.watch_stop_failed(&e)),
-                },
-                None => println!("{}", loc.watch_not_running()),
-            },
+            "3" => {
+                match session.take() {
+                    Some(s) => match s.stop_and_join() {
+                        Ok(()) => println!("{}", loc.watch_stopped_kept()),
+                        Err(e) => println!("{}", loc.watch_stop_failed(&e)),
+                    },
+                    None => println!("{}", loc.watch_not_running()),
+                }
+                // 任务 37（D）：[3] 也停掉后台保活实例（[0]→k 启动的
+                // 分离进程）——旧提示"用 [3] 停止"从此为真。无登记时
+                // stop_registered 返回 NoWatch（不输出，避免噪声）
+                let bg = crate::watchpid::stop_registered();
+                let msg = loc.background_watch_result(bg);
+                if !msg.is_empty() {
+                    println!("{msg}");
+                }
+            }
             "4" => {
                 if session.is_some() {
                     println!("{}", loc.stop_first_restore());

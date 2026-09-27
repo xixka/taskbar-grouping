@@ -91,6 +91,11 @@ pub(crate) struct WatchOptions {
     /// （启动/停止/扫存量/explorer 重启/重扫/熔断）落入数据目录
     /// tbg.log（256 KiB 上限，超限截半，原子替换）。
     pub(crate) ring_log: bool,
+    /// 任务 37/40（审查 D/Q）：后台模式（`--background`）——环形日志
+    /// 恒开（stdout 已归 NUL，ring log 是唯一事件轨迹）；就绪后登记
+    /// `tbg-watch.tsv` 并监听 `Local\tbg-lite.stop.<pid>` 命名事件
+    /// （`tbg-lite stop` 优雅停止，任务 31 保活实例的可停性由此而来）。
+    pub(crate) background: bool,
 }
 
 /// 观测统计（对应 docs/plan.md §7 Phase 0b-(6) 的压测数据需求）。
@@ -874,8 +879,11 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
         }
     }
 
-    // 任务 20：环形日志（--log，默认关）；只记关键事件，256 KiB 上限
-    let ring = RingLog::open(opts.ring_log);
+    // 任务 20：环形日志（--log，默认关）；只记关键事件，256 KiB 上限。
+    // 任务 40（审查 Q/R）：后台模式恒开——stdout 已归 NUL，环形日志是
+    // 后台实例唯一的事件轨迹（且有 256 KiB 截半上限，替代旧的无界
+    // tbg-background.log stdout 重定向）。
+    let ring = RingLog::open(opts.ring_log || opts.background);
     ring.log(&format!(
         "watch start: strategy={} group={:?} duration={:?} dry_run={}",
         if matches!(opts.strategy, WatchStrategy::Ungroup) { "ungroup" } else { "group" },
@@ -886,6 +894,24 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     if health.tripped {
         ring.log("circuit breaker tripped: autostart uninstalled");
     }
+
+    // 任务 37（审查 D）：后台模式的命名停止事件——`tbg-lite stop` 打开
+    // `Local\tbg-lite.stop.<pid>` 置位，消息泵每 ≤1s 轮询到即优雅退出。
+    // 创建失败只告警（stop 命令退化为超时后硬杀，仍可用）。
+    let stop_event = if opts.background {
+        match crate::watchpid::StopEvent::create() {
+            Some(ev) => Some(ev),
+            None => {
+                eprintln!(
+                    "watch: warning: cannot create the stop event — 'tbg-lite stop' will fall back to terminate"
+                );
+                ring.log("stop event create failed (stop command falls back to terminate)");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // AUMID 读写（IPropertyStore）要求本线程已初始化 COM
     let _com = winutil::ComGuard::init()?;
@@ -1002,6 +1028,21 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     }
     ring.log("startup sweep done");
 
+    // 任务 37（审查 D）：后台实例全面就绪（互斥/表/钩子/启动扫全部
+    // 通过，此后只剩正常退出路径）——登记 tbg-watch.tsv 供 `stop` /
+    // `status` 发现本实例。早退路径不经过这里，不会留下陈旧登记；
+    // 崩溃/强杀残留由 stop/status 检测死 PID 回收。登记失败不阻断。
+    if opts.background {
+        let strategy_name = if matches!(opts.strategy, WatchStrategy::Ungroup) { "ungroup" } else { "group" };
+        match crate::watchpid::register(strategy_name, opts.group_name.as_deref()) {
+            Ok(()) => ring.log("background watch registered (tbg-watch.tsv)"),
+            Err(e) => {
+                eprintln!("watch: warning: cannot register the background watch entry: {e}");
+                ring.log(&format!("watch registration failed: {e}"));
+            }
+        }
+    }
+
     // 4. 消息泵：winevent 回调在 PeekMessage 检索期间由系统调用；
     //    MsgWaitForMultipleObjectsEx 让消息一到就醒来（压测时延观察更真实）
     //    任务 20：常驻模式（--duration 0）下 wait 封顶 1s（原 2s/INFINITE）
@@ -1009,9 +1050,10 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     //    任务 34：控制台停止信号同享 ≤1s 轮询延迟
     let deadline = (!opts.duration.is_zero()).then(|| Instant::now() + opts.duration);
     let mut stopped_by_request = false;
-    // 任务 34（E/S）：停止来源区分——菜单停止标志 vs 控制台信号
-    // （Ctrl+C/Break/关窗/注销/关机），仅影响退出提示文案
+    // 任务 34/37（E/S/D）：停止来源区分——菜单停止标志 / 控制台信号 /
+    // `stop` 命令，仅影响退出提示文案
     let mut stopped_from_console = false;
+    let mut stopped_by_stop_cmd = false;
     let mut msg = MSG::default();
     // 任务 20：explorer 重启监视（GetShellWindow → 其属主进程 PID）。
     // 初始 None（watch 启动时无 shell，如 CI 探针场景）→ 首次见到 Some
@@ -1043,6 +1085,14 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
             stopped_by_request = true;
             stopped_from_console = true;
             break;
+        }
+        // 任务 37（D）：`tbg-lite stop` 的命名事件——同一优雅退出路径
+        if let Some(ev) = &stop_event {
+            if ev.signaled() {
+                stopped_by_request = true;
+                stopped_by_stop_cmd = true;
+                break;
+            }
         }
         let wait_ms = match deadline {
             Some(d) => {
@@ -1121,6 +1171,9 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
         if stopped_from_console {
             // 任务 34（E/S）：控制台信号（Ctrl+C/Break/关窗/注销/关机）
             println!("watch: console stop signal (task 34) — removing hooks and running the final scan");
+        } else if stopped_by_stop_cmd {
+            // 任务 37（D）：`tbg-lite stop` 命令
+            println!("watch: stop requested via 'tbg-lite stop' (task 37) — removing hooks and running the final scan");
         } else {
             println!("watch: stop requested (task 14) — removing hooks and running the final scan");
         }
@@ -1144,7 +1197,14 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     // + 环形日志收尾。到不了这里的退出（崩溃/强杀/早退 Err）即异常退出，
     // 下一轮 begin 据此累计熔断计数
     health.end_clean();
-    ring.log("watch stop (graceful)");
+    // 任务 37（D）：后台实例自清登记（仅当登记仍属于本进程——防误删
+    // 后启动的新实例）；stop_event 由 Drop 关闭句柄
+    if opts.background {
+        crate::watchpid::clear_if_owned();
+        ring.log("watch stop (graceful, background entry cleared)");
+    } else {
+        ring.log("watch stop (graceful)");
+    }
     Ok(())
 }
 
