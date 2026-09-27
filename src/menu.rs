@@ -777,7 +777,10 @@ pub(crate) fn run() -> ExitCode {
                 }
                 let Some(name_line) = prompt(loc.group_name_prompt()) else {
                     outln!();
-                    outln!("{}", loc.stdin_closed_watch_kept());
+                    // 任务 47（审查 K-③）：此处 watch 必未运行（上面
+                    // session.is_some() 已 continue）——旧文案恒错报
+                    // "watch 已停止"；与 [4] EOF 分支同文案
+                    outln!("{}", loc.stdin_closed_kept());
                     return exit_code(exit_restore_failed);
                 };
                 let name = name_line.trim();

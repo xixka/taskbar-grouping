@@ -801,9 +801,12 @@ impl WatcherState {
         let mut reverted: Vec<String> = Vec::new();
         let mut alive_marked: u64 = 0;
         let mut scan_read_fail: u64 = 0;
-        // 本线路的"已标记"判定：线路一认后缀标记，线路二认共享前缀
-        let is_marked = |aumid: &str| match self.strategy {
-            WatchStrategy::Ungroup => aumid.contains(appid::SUFFIX_MARKER),
+        // 本线路的"已标记"判定：线路二认共享前缀；线路一走严格判定
+        // （任务 47，审查 K-①：终扫处有真实 HWND——标记 + 合法 hex +
+        // HWND 一致，`contains` 粗判会把恰含 "~TBG~w" 字样的原生 AUMID
+        // 误计为 alive_marked）
+        let is_marked = |aumid: &str, hwnd: HWND| match self.strategy {
+            WatchStrategy::Ungroup => appid::strip_suffix(aumid, hwnd).is_some(),
             WatchStrategy::Group => appid::is_group_aumid(aumid),
         };
         for hwnd in winutil::enum_top_level_windows().unwrap_or_default() {
@@ -823,7 +826,7 @@ impl WatcherState {
                     continue;
                 }
             };
-            if is_marked(&aumid) {
+            if is_marked(&aumid, hwnd) {
                 alive_marked += 1;
             } else if was_handled {
                 reverted.push(format!("{} aumid={:?}", fmt_window(hwnd), aumid));

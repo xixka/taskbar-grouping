@@ -358,7 +358,14 @@ pub(crate) fn cmd_inspect(args: &[String]) -> Result<(), String> {
                     json_escape(&winutil::class_name(hwnd)),
                     json_escape(&winutil::window_text(hwnd)),
                     aumid_json,
-                    aumid.as_deref().map(|v| v.contains(appid::SUFFIX_MARKER)).unwrap_or(false),
+                    // 任务 47（审查 K-②）：列表模式有真实 HWND——与单窗
+                    // 模式对齐用严格判定（标记+合法hex+HWND 一致），
+                    // contains 粗判会把恰含 "~TBG~w" 字样的原生 AUMID
+                    // 误报为已标记
+                    aumid
+                        .as_deref()
+                        .map(|v| appid::strip_suffix(v, hwnd).is_some())
+                        .unwrap_or(false),
                     aumid.as_deref().map(appid::is_group_aumid).unwrap_or(false)
                 ));
             }
