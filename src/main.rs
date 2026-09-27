@@ -173,11 +173,16 @@ fn main() -> ExitCode {
     // panic=abort 下表现为丑陋中止。装 panic hook：管道断裂 → 静默退出 0
     // （`tbg-lite inspect | head -1` 等 CLI 管道惯例）；其他 panic → 单行
     // 报告 + 101（保留可诊断性）。
+    // 任务 45（审查 P3-T，2026-09-25）：panic 现场追加落盘数据目录
+    // `tbg-panic.log`（一行时间戳 + 消息，换行压平）——release
+    // panic=abort 下 watch 线程/菜单整体崩溃只剩 stderr 一闪即逝，
+    // 落盘后重启可查（A 修复后最大 panic 源已消除，此为兜底）。
     std::panic::set_hook(Box::new(|info| {
         let msg = info.to_string();
         if msg.contains("failed printing to stdout") {
             std::process::exit(0);
         }
+        let _ = append_panic_log(&msg);
         eprintln!("tbg-lite: internal error: {msg}");
         std::process::exit(101);
     }));
@@ -220,6 +225,25 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// 任务 45（审查 P3-T）：panic 现场一行落盘（数据目录 tbg-panic.log，
+/// 追加；尽力而为——数据目录不可用时静默）。换行压平为空格保证
+/// 单行可 grep；时间戳 Unix 秒与环形日志同口径。
+fn append_panic_log(msg: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let dir = restoremap::data_dir().map_err(std::io::Error::other)?;
+    std::fs::create_dir_all(&dir)?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let line = format!("[{ts}] panic: {}\n", msg.replace(['\r', '\n'], " "));
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("tbg-panic.log"))?;
+    f.write_all(line.as_bytes())
 }
 
 fn report(r: Result<(), String>) -> ExitCode {
