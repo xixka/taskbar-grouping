@@ -12,7 +12,10 @@
 //! 自身不初始化 COM——`inspect` / `restore` 动作直接复用 main.rs 的
 //! `cmd_inspect` / `cmd_restore`（内部各自 ComGuard，逐次调用即可）。
 //! stdin 关闭（EOF / 重定向管道写端关闭）→ 视同选择退出（默认不还原），
-//! 保证脚本化/CI 驱动下不会忙转。
+//! 保证脚本化/CI 驱动下不会忙转。任务 34（审查 S）：菜单入口装
+//! `crate::console` 控制台信号处理器——关窗/注销等 conhost 终止事件
+//! 打断 stdin 读走同一条 EOF 优雅路径（Ctrl+C 语义不变，退出主路径
+//! 仍是菜单项 `[0]`）。
 //!
 //! stdin 首行 UTF-8 BOM 容错：Windows 管道写端（如 PowerShell
 //! `Process.StandardInput` 的 StreamWriter）与记事本保存的脚本文件

@@ -19,6 +19,7 @@
 
 mod appid;
 mod autostart;
+mod console;
 mod health;
 mod menu;
 mod restoremap;
@@ -84,7 +85,9 @@ COMMANDS:
                                      for restore)
               --duration <SECS>  run length (default 60; 0 = until stopped:
                                  menu mode exits gracefully via the stop
-                                 flag; CLI mode Ctrl+C is a hard exit)
+                                 flag; CLI mode stops gracefully on the
+                                 first Ctrl+C, hard exit on the second
+                                 (task 34))
               --dry-run          log only, never write AUMID
               --verbose          also log skipped windows with reasons
               --log              ring log to %LOCALAPPDATA%\\tbg-lite\\tbg.log
@@ -167,7 +170,13 @@ fn main() -> ExitCode {
     match args.first().map(String::as_str) {
         // 任务 14（2026-09-22 维护者指示）：无参数启动 → 交互菜单
         // （含退出项，不需要 Ctrl+C）；--help 仍打印本帮助文本
-        None => menu::run(),
+        // 任务 34（S）：菜单会话装控制台信号处理器——关窗/注销时
+        // conhost 默认直接终止进程；置标志后 stdin 读被打断，走 EOF
+        // 优雅路径停 watch 线程并收尾
+        None => {
+            console::install_ctrl_handler();
+            menu::run()
+        }
         Some("-h") | Some("--help") => {
             print!("{HELP}");
             ExitCode::SUCCESS
@@ -432,14 +441,19 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     if let Some(name) = group_name.as_deref() {
         appid::group_aumid(name).map_err(|e| format!("usage: watch: {e}"))?;
     }
+    // 任务 34（E）：CLI watch 装控制台信号处理器——Ctrl+C/Break/关窗
+    // 由硬杀改为优雅退出（摘钩 + 终扫统计 + health end_clean；第二次
+    // 信号仍立即硬杀）。注册失败不致命，退回默认行为。
+    // 菜单模式的 watch 线程在 menu.rs 入口统一安装（S：关窗优雅收尾）。
+    console::install_ctrl_handler();
     winevent::run(winevent::WatchOptions {
         duration: Duration::from_secs(duration_secs),
         dry_run,
         verbose,
         strategy,
         group_name,
-        // CLI 参数模式：无外部停止标志（--duration 0 = Ctrl+C 强杀，
-        // 原行为不变；优雅退出属菜单模式，任务 14）
+        // CLI 参数模式：无菜单停止标志——停止信号来自控制台处理器
+        // （crate::console，任务 34）或 duration 到点
         stop: None,
         // 任务 20：--log 环形日志（默认关）
         ring_log,

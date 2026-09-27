@@ -943,10 +943,12 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
             // 任务 14：菜单模式——由停止标志优雅退出（无需 Ctrl+C）
             println!("duration: until stopped from the interactive menu (graceful stop: hooks removed + stats printed)");
         } else {
-            println!("duration: until Ctrl+C (hard exit, no stats printed)");
+            // 任务 34（E）：CLI 常驻——Ctrl+C 优雅退出（统计 + 收尾），
+            // 第二次信号才硬杀
+            println!("duration: until Ctrl+C (graceful stop: stats printed; press Ctrl+C twice to hard-kill)");
         }
     } else {
-        println!("duration: {:?} (Ctrl+C = hard exit without stats)", opts.duration);
+        println!("duration: {:?} (Ctrl+C = graceful stop with stats)", opts.duration);
     }
     if opts.dry_run {
         println!("mode: dry-run (no AUMID writes)");
@@ -980,11 +982,14 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
 
     // 4. 消息泵：winevent 回调在 PeekMessage 检索期间由系统调用；
     //    MsgWaitForMultipleObjectsEx 让消息一到就醒来（压测时延观察更真实）
-    //    任务 20：常驻模式（--duration 0 且无停止标志）下 wait 封顶 2s
-    //    （原为 INFINITE）——宿主以 2s 级轮询 explorer PID，重启即全量
-    //    重扫重标记；Ctrl+C 硬杀行为不变
+    //    任务 20：常驻模式（--duration 0）下 wait 封顶 1s（原 2s/INFINITE）
+    //    ——2s 级轮询 explorer PID 重启重扫（last_shell_poll 独立节拍）；
+    //    任务 34：控制台停止信号同享 ≤1s 轮询延迟
     let deadline = (!opts.duration.is_zero()).then(|| Instant::now() + opts.duration);
     let mut stopped_by_request = false;
+    // 任务 34（E/S）：停止来源区分——菜单停止标志 vs 控制台信号
+    // （Ctrl+C/Break/关窗/注销/关机），仅影响退出提示文案
+    let mut stopped_from_console = false;
     let mut msg = MSG::default();
     // 任务 20：explorer 重启监视（GetShellWindow → 其属主进程 PID）。
     // 初始 None（watch 启动时无 shell，如 CI 探针场景）→ 首次见到 Some
@@ -1008,6 +1013,15 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
                 break;
             }
         }
+        // 任务 34（E/S）：控制台信号（Ctrl+C/Ctrl+Break/关窗/注销/
+        // 关机）——console.rs 处理器置位后同样走优雅退出（摘钩 + 终扫
+        // 统计 + health end_clean），取代原先的硬杀（无统计且 30s 内
+        // 反复 Ctrl+C 会误累计熔断）。消息泵至多 1s 醒一次轮询此标志。
+        if crate::console::stop_requested() {
+            stopped_by_request = true;
+            stopped_from_console = true;
+            break;
+        }
         let wait_ms = match deadline {
             Some(d) => {
                 let now = Instant::now();
@@ -1022,16 +1036,10 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
                 // 理论忙转。每秒醒一次检查 deadline，成本可忽略
                 remain.as_millis().min(1000) as u32
             }
-            // 无 deadline（常驻）：菜单模式（有停止标志）→ 1s 轮询标志；
-            // CLI 参数模式 → 2s 轮询 explorer PID（任务 20，原 INFINITE；
-            // Ctrl+C 强杀行为不变）
-            None => {
-                if opts.stop.is_some() {
-                    1000
-                } else {
-                    2000
-                }
-            }
+            // 无 deadline（常驻）：1s 轮询停止标志（菜单标志 / 任务 34
+            // 控制台信号共用——优雅退出延迟 ≤1s）；explorer PID 轮询有
+            // 自己的 2s 节拍（last_shell_poll），不受此封顶影响
+            None => 1000,
         };
         unsafe {
             let _ = MsgWaitForMultipleObjectsEx(None, wait_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
@@ -1088,7 +1096,12 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
 
     if stopped_by_request {
         println!();
-        println!("watch: stop requested (task 14) — removing hooks and running the final scan");
+        if stopped_from_console {
+            // 任务 34（E/S）：控制台信号（Ctrl+C/Break/关窗/注销/关机）
+            println!("watch: console stop signal (task 34) — removing hooks and running the final scan");
+        } else {
+            println!("watch: stop requested (task 14) — removing hooks and running the final scan");
+        }
     }
 
     // 5. 摘钩子
