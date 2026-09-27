@@ -25,6 +25,10 @@ pub(crate) const LOG_FILE_NAME: &str = "tbg.log";
 /// 文件上限：超过即截半（保留后半段）。
 const MAX_BYTES: u64 = 256 * 1024;
 
+/// Clone（任务 42，审查 P）：安静模式下 `WatcherState` 持有一份副本
+/// 作为逐窗口事件行的出口（`Option<PathBuf>` 廉值克隆，共享同一日志
+/// 文件与写路径语义）。
+#[derive(Clone)]
 pub(crate) struct RingLog {
     /// None = 未启用（默认）。启用但数据目录不可用时也为 None（告警一次）。
     path: Option<PathBuf>,

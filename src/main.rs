@@ -488,6 +488,9 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
         ring_log,
         // 任务 37/40（D/Q）：后台模式
         background,
+        // 任务 42（P）：安静模式仅交互菜单使用；CLI 恒 false（输出
+        // 行为与旧版一致，CI 断言口径不变）
+        quiet: false,
     })
 }
 

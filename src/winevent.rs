@@ -96,6 +96,14 @@ pub(crate) struct WatchOptions {
     /// `tbg-watch.tsv` 并监听 `Local\tbg-lite.stop.<pid>` 命名事件
     /// （`tbg-lite stop` 优雅停止，任务 31 保活实例的可停性由此而来）。
     pub(crate) background: bool,
+    /// 任务 42（审查 P1-P，2026-09-25）：安静模式（交互菜单传入 true）。
+    /// 逐窗口事件行（SWEEP/mark/REASSERT/skip）、启动横幅、shell 重启
+    /// 告警不再打印到与菜单共享的 stdout（防事件流冲刷菜单 UI/提示符/
+    /// 输入行），转落环形日志（本模式下恒开，256 KiB 有界，事件可完整
+    /// 追溯）；summary 行（启动扫统计/重扫统计）与统计块（停止后
+    /// `final_scan_and_report` 聚合输出）保留 stdout。CLI 模式恒 false，
+    /// 输出行为与旧版完全一致。
+    pub(crate) quiet: bool,
 }
 
 /// 观测统计（对应 docs/plan.md §7 Phase 0b-(6) 的压测数据需求）。
@@ -137,9 +145,37 @@ struct Stats {
     resweep_marked: u64,
 }
 
+/// 任务 42（审查 P1-P）：逐窗口事件行输出——安静模式（交互菜单）转
+/// 环形日志（菜单 UI/提示符/输入行不再被事件流冲刷，事件仍可完整
+/// 追溯）；CLI 模式 = println! 原语义（CI 断言与文档口径不变）。
+macro_rules! evln {
+    ($self:expr, $($arg:tt)*) => {
+        if $self.quiet {
+            $self.ring.log(&format!($($arg)*));
+        } else {
+            println!($($arg)*);
+        }
+    };
+}
+
+/// 同上，stderr 变体（写入失败告警行）。
+macro_rules! eevln {
+    ($self:expr, $($arg:tt)*) => {
+        if $self.quiet {
+            $self.ring.log(&format!($($arg)*));
+        } else {
+            eprintln!($($arg)*);
+        }
+    };
+}
+
 struct WatcherState {
     dry_run: bool,
     verbose: bool,
+    /// 任务 42（P）：安静模式——逐窗口事件行入环形日志而非 stdout。
+    quiet: bool,
+    /// 任务 42（P）：环形日志句柄（安静模式的事件轨迹出口）。
+    ring: RingLog,
     strategy: WatchStrategy,
     /// 线路二的共享 AUMID（`strategy == Ungroup` 时为空串）。
     group_value: String,
@@ -200,10 +236,13 @@ impl WatcherState {
         opts: &WatchOptions,
         group_value: String,
         map: Option<RestoreMap>,
+        ring: RingLog,
     ) -> Self {
         Self {
             dry_run: opts.dry_run,
             verbose: opts.verbose,
+            quiet: opts.quiet,
+            ring,
             strategy: opts.strategy,
             group_value,
             map,
@@ -430,7 +469,7 @@ impl WatcherState {
         }
         if self.dry_run {
             self.stats.dry_run_hits += 1;
-            println!(
+            evln!(self,
                 "{} {} {} [dry-run] aumid={:?} -> {:?}",
                 self.ts(),
                 name,
@@ -450,7 +489,7 @@ impl WatcherState {
                     SweepKind::Resweep => self.stats.resweep_rewritten += 1,
                     SweepKind::None => {}
                 }
-                println!(
+                evln!(self,
                     "{} {} {} aumid={:?} -> {:?} (write {:.1}ms)",
                     self.ts(),
                     name,
@@ -463,7 +502,7 @@ impl WatcherState {
             }
             Err(e) => {
                 self.stats.write_fail += 1;
-                println!(
+                evln!(self,
                     "{} {} {} aumid={:?} write FAILED: {e}",
                     self.ts(),
                     name,
@@ -481,7 +520,7 @@ impl WatcherState {
         let shared = self.group_value.clone();
         if self.dry_run {
             self.stats.dry_run_hits += 1;
-            println!(
+            evln!(self,
                 "{} {} {} [dry-run] aumid={:?} -> {:?} (group)",
                 self.ts(),
                 name,
@@ -494,7 +533,7 @@ impl WatcherState {
         }
         let Some(map) = self.map.as_mut() else {
             self.stats.write_fail += 1;
-            println!(
+            evln!(self,
                 "{} {} {} group write FAILED: no restore map loaded",
                 self.ts(),
                 name,
@@ -507,7 +546,7 @@ impl WatcherState {
         // 保住其余窗口与整表可用性
         if !map.record(key, &shared, &aumid) {
             self.stats.write_fail += 1;
-            println!(
+            evln!(self,
                 "{} {} {} group write REJECTED: AUMID contains line breaks (map integrity guard, task 36; AUMID left untouched)",
                 self.ts(),
                 name,
@@ -518,7 +557,7 @@ impl WatcherState {
         if let Err(e) = map.save() {
             map.remove(key);
             self.stats.write_fail += 1;
-            println!(
+            evln!(self,
                 "{} {} {} group write FAILED: {e} (AUMID left untouched)",
                 self.ts(),
                 name,
@@ -535,7 +574,7 @@ impl WatcherState {
                     SweepKind::Resweep => self.stats.resweep_rewritten += 1,
                     SweepKind::None => {}
                 }
-                println!(
+                evln!(self,
                     "{} {} {} aumid={:?} -> {:?} (group, write {:.1}ms)",
                     self.ts(),
                     name,
@@ -553,7 +592,7 @@ impl WatcherState {
                     let _ = map.save();
                 }
                 self.stats.write_fail += 1;
-                println!(
+                evln!(self,
                     "{} {} {} aumid={:?} group write FAILED: {e}",
                     self.ts(),
                     name,
@@ -566,7 +605,7 @@ impl WatcherState {
     }
 
     fn log_skip(&self, name: &str, hwnd: HWND, reason: &str) {
-        println!(
+        evln!(self,
             "{} {} {} skip: {reason}",
             self.ts(),
             name,
@@ -632,7 +671,7 @@ impl WatcherState {
                     // 落盘失败则不写（还原能力优先于分组生效，apply_group 同则）
                     let Some(map) = self.map.as_mut() else {
                         self.stats.write_fail += 1;
-                        eprintln!(
+                        eevln!(self,
                             "{} REASSERT {} group reassert FAILED: no restore map loaded",
                             self.ts(),
                             fmt_window(hwnd)
@@ -643,7 +682,7 @@ impl WatcherState {
                     // （AUMID 保持现状，无还原损失）
                     if !map.record(key, &self.group_value, &aumid) {
                         self.stats.write_fail += 1;
-                        eprintln!(
+                        eevln!(self,
                             "{} REASSERT {} reassert REJECTED: AUMID contains line breaks (map integrity guard, task 36; AUMID left untouched)",
                             self.ts(),
                             fmt_window(hwnd)
@@ -653,7 +692,7 @@ impl WatcherState {
                     if let Err(e) = map.save() {
                         map.remove(key);
                         self.stats.write_fail += 1;
-                        eprintln!(
+                        eevln!(self,
                             "{} REASSERT {} map save FAILED: {e} (AUMID left untouched)",
                             self.ts(),
                             fmt_window(hwnd)
@@ -671,7 +710,7 @@ impl WatcherState {
         match appid::set_aumid(hwnd, &target) {
             Ok(()) => {
                 self.stats.reasserted += 1;
-                println!(
+                evln!(self,
                     "{} REASSERT {} aumid={:?} -> {:?} (marker lost, re-applied, write {:.1}ms)",
                     self.ts(),
                     fmt_window(hwnd),
@@ -682,7 +721,7 @@ impl WatcherState {
             }
             Err(e) => {
                 self.stats.write_fail += 1;
-                eprintln!(
+                eevln!(self,
                     "{} REASSERT {} write FAILED: {e}",
                     self.ts(),
                     fmt_window(hwnd)
@@ -883,7 +922,9 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     // 任务 40（审查 Q/R）：后台模式恒开——stdout 已归 NUL，环形日志是
     // 后台实例唯一的事件轨迹（且有 256 KiB 截半上限，替代旧的无界
     // tbg-background.log stdout 重定向）。
-    let ring = RingLog::open(opts.ring_log || opts.background);
+    // 任务 42（审查 P）：安静模式（交互菜单）恒开——逐窗口事件行从
+    // stdout 转入环形日志（菜单 UI 不被冲刷，事件仍可完整追溯）。
+    let ring = RingLog::open(opts.ring_log || opts.background || opts.quiet);
     ring.log(&format!(
         "watch start: strategy={} group={:?} duration={:?} dry_run={}",
         if matches!(opts.strategy, WatchStrategy::Ungroup) { "ungroup" } else { "group" },
@@ -940,8 +981,9 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
 
     // 1. 线程本地状态先行就位（回调里 if-let 判空，绝不 panic）。
     //    注意：启动扫存量必须在钩子安装之后做，见下方第 3 步。
+    //    任务 42（P）：WatcherState 持有 ring 副本（quiet 模式事件行出口）。
     WATCHER.with(|cell| {
-        *cell.borrow_mut() = Some(WatcherState::new(&opts, group_value, map));
+        *cell.borrow_mut() = Some(WatcherState::new(&opts, group_value, map, ring.clone()));
     });
 
     // 2. 安装 winevent 钩子（零注入：WINEVENT_OUTOFCONTEXT 回调只在本进程执行）。
@@ -966,45 +1008,50 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
         hooks.push(h);
     }
 
-    println!("tbg-lite watch (task 6/8/13/24): SetWinEventHook CREATE/SHOW/NAMECHANGE/DESTROY, out-of-context, skip-own-process");
-    println!("strategy : {}", opts.strategy.label());
-    if ring.enabled() {
-        println!(
-            "log      : ring log enabled (%LOCALAPPDATA%\\tbg-lite\\{}), 256 KiB cap (task 20)",
-            crate::ringlog::LOG_FILE_NAME
-        );
-    }
-    println!("startup  : pre-existing app windows are rewritten at launch (task 13: enabling = ungroup everything)");
-    if matches!(opts.strategy, WatchStrategy::Group) {
-        println!(
-            "group    : every candidate window (incl. pre-existing) gets the shared AUMID {group_display:?}"
-        );
-        println!(
-            "restore  : originals persisted to {} (in %LOCALAPPDATA%\\tbg-lite) for `restore`",
-            crate::restoremap::MAP_FILE_NAME
-        );
-    }
-    println!("note: DESTROY hook is bookkeeping only (tracked-window cleanup)");
-    println!("reassert : markers lost to app/shell rewrites are re-applied (task 28: NAMECHANGE check + 5s periodic verify)");
-    if opts.duration.is_zero() {
-        if opts.stop.is_some() {
-            // 任务 14：菜单模式——由停止标志优雅退出（无需 Ctrl+C）
-            println!("duration: until stopped from the interactive menu (graceful stop: hooks removed + stats printed)");
-        } else {
-            // 任务 34（E）：CLI 常驻——Ctrl+C 优雅退出（统计 + 收尾），
-            // 第二次信号才硬杀
-            println!("duration: until Ctrl+C (graceful stop: stats printed; press Ctrl+C twice to hard-kill)");
+    // 任务 42（P）：安静模式（交互菜单）不打启动横幅——~20 行横幅与
+    // 逐窗口事件流一样会冲刷菜单 UI；信息浓缩为 summary 行（启动扫
+    // 统计在 sweep 后打印）与环形日志。CLI 模式横幅原样。
+    if !opts.quiet {
+        println!("tbg-lite watch (task 6/8/13/24): SetWinEventHook CREATE/SHOW/NAMECHANGE/DESTROY, out-of-context, skip-own-process");
+        println!("strategy : {}", opts.strategy.label());
+        if ring.enabled() {
+            println!(
+                "log      : ring log enabled (%LOCALAPPDATA%\\tbg-lite\\{}), 256 KiB cap (task 20)",
+                crate::ringlog::LOG_FILE_NAME
+            );
         }
-    } else {
-        println!("duration: {:?} (Ctrl+C = graceful stop with stats)", opts.duration);
+        println!("startup  : pre-existing app windows are rewritten at launch (task 13: enabling = ungroup everything)");
+        if matches!(opts.strategy, WatchStrategy::Group) {
+            println!(
+                "group    : every candidate window (incl. pre-existing) gets the shared AUMID {group_display:?}"
+            );
+            println!(
+                "restore  : originals persisted to {} (in %LOCALAPPDATA%\\tbg-lite) for `restore`",
+                crate::restoremap::MAP_FILE_NAME
+            );
+        }
+        println!("note: DESTROY hook is bookkeeping only (tracked-window cleanup)");
+        println!("reassert : markers lost to app/shell rewrites are re-applied (task 28: NAMECHANGE check + 5s periodic verify)");
+        if opts.duration.is_zero() {
+            if opts.stop.is_some() {
+                // 任务 14：菜单模式——由停止标志优雅退出（无需 Ctrl+C）
+                println!("duration: until stopped from the interactive menu (graceful stop: hooks removed + stats printed)");
+            } else {
+                // 任务 34（E）：CLI 常驻——Ctrl+C 优雅退出（统计 + 收尾），
+                // 第二次信号才硬杀
+                println!("duration: until Ctrl+C (graceful stop: stats printed; press Ctrl+C twice to hard-kill)");
+            }
+        } else {
+            println!("duration: {:?} (Ctrl+C = graceful stop with stats)", opts.duration);
+        }
+        if opts.dry_run {
+            println!("mode: dry-run (no AUMID writes)");
+        }
+        if opts.verbose {
+            println!("mode: verbose skips");
+        }
+        println!();
     }
-    if opts.dry_run {
-        println!("mode: dry-run (no AUMID writes)");
-    }
-    if opts.verbose {
-        println!("mode: verbose skips");
-    }
-    println!();
 
     // 3. 启动扫存量（任务 13）：把已存在的应用窗口也按当前线路改写
     //    （对齐 mod 默认"开启即全量取消分组"）。必须在钩子安装之后执行：
@@ -1125,10 +1172,18 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
             let cur = current_shell_pid();
             match (last_shell_pid, cur) {
                 (Some(prev), Some(cur_pid)) if cur_pid != prev => {
-                    // shell 重启：全量重扫重标记（窗口属性可能丢失，幂等补标）
-                    println!(
-                        "watch: shell restart detected (task 20): explorer pid {prev} -> {cur_pid}; re-sweeping all windows"
-                    );
+                    // shell 重启：全量重扫重标记（窗口属性可能丢失，幂等补标）。
+                    // 任务 42（P）：安静模式不打 stdout（防冲刷菜单 UI），
+                    // 环形日志照记；重扫统计 summary 行保留 stdout
+                    if opts.quiet {
+                        ring.log(&format!(
+                            "shell restart detected (task 20): explorer pid {prev} -> {cur_pid}; re-sweeping"
+                        ));
+                    } else {
+                        println!(
+                            "watch: shell restart detected (task 20): explorer pid {prev} -> {cur_pid}; re-sweeping all windows"
+                        );
+                    }
                     ring.log(&format!("shell restart: explorer pid {prev} -> {cur_pid}"));
                     WATCHER.with(|cell| {
                         if let Some(state) = cell.borrow_mut().as_mut() {
