@@ -28,7 +28,7 @@
 //! 行为断言已可由 CI 冒烟代行）。
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -188,8 +188,17 @@ struct WatcherState {
     baseline: HashSet<usize>,
     baseline_count: u64,
     /// 本会话已处理（改写 / 判定跳过）的窗口（含启动扫存量的产出），
-    /// 以 HWND 数值为键。
-    handled: HashSet<usize>,
+    /// 以 HWND 数值为键，值 = 处理时的属主进程 PID。
+    /// 任务 50（审查 L）：HWND 数值可能被系统复用——事件入口与 5s
+    /// 复核先比对 PID，不一致即按新窗口处理（旧条目清除），换取复用
+    /// 场景零误标（成本：一次 GetWindowThreadProcessId）。
+    handled: HashMap<usize, u32>,
+    /// 任务 50（审查 H）：本会话**真实写入成功**（apply_* 成功 + reassert
+    /// 补写成功）的窗口集合——终扫 `reverted` 的判定口径。旧口径用
+    /// `handled`（含 cross-line / shell / already-marked 跳过类）会把
+    /// 从未改写过的窗口误报为 "app rewrote its AUMID"；DESTROY 与 PID
+    /// 复用清理同步移除。
+    rewritten: HashSet<usize>,
     /// 当前扫描类别（任务 13 启动扫 / 任务 20 重启重扫；None = 事件驱动），
     /// 供 consider 链路由改写与幂等命中计数。
     sweep_kind: SweepKind,
@@ -249,7 +258,8 @@ impl WatcherState {
             started: Instant::now(),
             baseline: HashSet::new(),
             baseline_count: 0,
-            handled: HashSet::new(),
+            handled: HashMap::new(),
+            rewritten: HashSet::new(),
             sweep_kind: SweepKind::None,
             stats: Stats::default(),
         }
@@ -335,13 +345,14 @@ impl WatcherState {
                 "NAME"
             }
             EVENT_OBJECT_DESTROY => {
-                let was_handled = self.handled.remove(&key);
+                let was_handled = self.handled.remove(&key).is_some();
+                let was_rewritten = self.rewritten.remove(&key);
                 let was_baseline = self.baseline.remove(&key);
                 if was_handled | was_baseline {
                     self.stats.events_destroy_tracked += 1;
                 }
                 // 线路二：已分组窗口销毁 → 丢弃还原映射（HWND 可能被复用）
-                if was_handled && matches!(self.strategy, WatchStrategy::Group) {
+                if (was_handled || was_rewritten) && matches!(self.strategy, WatchStrategy::Group) {
                     if let Some(map) = self.map.as_mut() {
                         if map.remove(key) {
                             let _ = map.save();
@@ -352,7 +363,23 @@ impl WatcherState {
             }
             _ => return,
         };
-        if self.handled.contains(&key) {
+        // 任务 50（审查 L）：HWND 复用防护——handled 记录的属主 PID 与
+        // 当前不符 = 数值已被系统复用成新窗口：清旧条目（含 rewritten
+        // 与线路二映射条目），按新窗口重新走 consider
+        if let Some(&old_pid) = self.handled.get(&key) {
+            if old_pid != unsafe { winutil::window_pid(hwnd) } {
+                self.handled.remove(&key);
+                self.rewritten.remove(&key);
+                if matches!(self.strategy, WatchStrategy::Group) {
+                    if let Some(map) = self.map.as_mut() {
+                        if map.remove(key) {
+                            let _ = map.save();
+                        }
+                    }
+                }
+            }
+        }
+        if self.handled.contains_key(&key) {
             // 已处理过（CREATE 处理后紧随的 SHOW 等）。NAMECHANGE 例外：
             // 任务 24 口径下它是标题后置窗口的重评估入口；任务 28 起对
             // 已处理窗口承担第二职责——回写检测入口（reassert：标记
@@ -372,6 +399,8 @@ impl WatcherState {
     }
 
     unsafe fn consider(&mut self, name: &str, hwnd: HWND, key: usize) {
+        // 任务 50（L）：记录属主 PID，供事件入口与 5s 复核做复用判定
+        let pid = winutil::window_pid(hwnd);
         if !winutil::is_app_window(hwnd) {
             // CREATE 早期窗口常尚不可见 / 无标题：不进 handled，
             // 待 SHOW 事件再评估
@@ -383,7 +412,7 @@ impl WatcherState {
             if self.verbose {
                 self.log_skip(name, hwnd, "shell window");
             }
-            self.handled.insert(key);
+            self.handled.insert(key, pid);
             return;
         }
         if winutil::is_cloaked(hwnd) {
@@ -451,7 +480,7 @@ impl WatcherState {
             if self.verbose {
                 self.log_skip(name, hwnd, reason);
             }
-            self.handled.insert(key);
+            self.handled.insert(key, pid);
             return;
         }
         self.stats.candidates += 1;
@@ -463,6 +492,7 @@ impl WatcherState {
 
     /// 线路一：追加每窗口后缀（任务 6 原逻辑）。
     unsafe fn apply_ungroup(&mut self, name: &str, hwnd: HWND, key: usize, aumid: String) {
+        let pid = winutil::window_pid(hwnd);
         let suffixed = appid::suffixed_aumid(&aumid, hwnd);
         if suffixed.truncated {
             self.stats.truncated += 1;
@@ -477,7 +507,7 @@ impl WatcherState {
                 winutil::shown_aumid(&aumid),
                 suffixed.value
             );
-            self.handled.insert(key);
+            self.handled.insert(key, pid);
             return;
         }
         let t0 = Instant::now();
@@ -498,7 +528,9 @@ impl WatcherState {
                     suffixed.value,
                     t0.elapsed().as_secs_f64() * 1000.0
                 );
-                self.handled.insert(key);
+                self.handled.insert(key, pid);
+                // 任务 50（H）：真实写入成功 → rewritten 集（终扫口径）
+                self.rewritten.insert(key);
             }
             Err(e) => {
                 self.stats.write_fail += 1;
@@ -517,6 +549,7 @@ impl WatcherState {
     /// 线路二：改写为共享 AUMID（任务 8）。先落盘还原映射，再写属性；
     /// 映射保存失败则放弃改写（保住还原能力优先于分组生效）。
     unsafe fn apply_group(&mut self, name: &str, hwnd: HWND, key: usize, aumid: String) {
+        let pid = winutil::window_pid(hwnd);
         let shared = self.group_value.clone();
         if self.dry_run {
             self.stats.dry_run_hits += 1;
@@ -528,7 +561,7 @@ impl WatcherState {
                 winutil::shown_aumid(&aumid),
                 shared
             );
-            self.handled.insert(key);
+            self.handled.insert(key, pid);
             return;
         }
         let Some(map) = self.map.as_mut() else {
@@ -583,7 +616,9 @@ impl WatcherState {
                     shared,
                     t0.elapsed().as_secs_f64() * 1000.0
                 );
-                self.handled.insert(key);
+                self.handled.insert(key, pid);
+                // 任务 50（H）：真实写入成功 → rewritten 集（终扫口径）
+                self.rewritten.insert(key);
             }
             Err(e) => {
                 // 回滚映射条目：AUMID 未动，条目已作废
@@ -710,6 +745,8 @@ impl WatcherState {
         match appid::set_aumid(hwnd, &target) {
             Ok(()) => {
                 self.stats.reasserted += 1;
+                // 任务 50（H）：补写成功 → rewritten 集（终扫口径）
+                self.rewritten.insert(key);
                 evln!(self,
                     "{} REASSERT {} aumid={:?} -> {:?} (marker lost, re-applied, write {:.1}ms)",
                     self.ts(),
@@ -734,9 +771,26 @@ impl WatcherState {
     /// （NAMECHANGE 入口覆盖导航/标题变化场景，此入口覆盖其余）。快照
     /// 键集后逐个 reassert；读失败即跳过（DESTROY 簿记负责清理）。
     unsafe fn reverify_handled(&mut self) {
-        let keys: Vec<usize> = self.handled.iter().copied().collect();
+        let keys: Vec<usize> = self.handled.keys().copied().collect();
         for key in keys {
             let hwnd = HWND(key as *mut _);
+            // 任务 50（审查 L）：PID 复用防护——当前属主与记录不符
+            // （含窗口已销毁 = pid 0）= 数值被复用/回收：清旧条目按新
+            // 窗口处理（后续事件会重新评估）
+            if let Some(&old_pid) = self.handled.get(&key) {
+                if old_pid != winutil::window_pid(hwnd) {
+                    self.handled.remove(&key);
+                    self.rewritten.remove(&key);
+                    if matches!(self.strategy, WatchStrategy::Group) {
+                        if let Some(map) = self.map.as_mut() {
+                            if map.remove(key) {
+                                let _ = map.save();
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
             self.reassert(hwnd, key);
         }
     }
@@ -811,7 +865,11 @@ impl WatcherState {
         };
         for hwnd in winutil::enum_top_level_windows().unwrap_or_default() {
             let key = hwnd.0 as usize;
-            let was_handled = self.handled.contains(&key);
+            let was_handled = self.handled.contains_key(&key);
+            // 任务 50（审查 H）：reverted 口径 = 本会话真实写入成功的
+            // 窗口（rewritten 集）——跳过类（cross-line / shell /
+            // already-marked）不再误报为 "app rewrote its AUMID"
+            let was_rewritten = self.rewritten.contains(&key);
             let is_new = !self.baseline.contains(&key);
             if !was_handled && !is_new {
                 // 启动时已存在且本会话未处理（启动扫判非应用窗口后一直
@@ -828,7 +886,7 @@ impl WatcherState {
             };
             if is_marked(&aumid, hwnd) {
                 alive_marked += 1;
-            } else if was_handled {
+            } else if was_rewritten {
                 reverted.push(format!("{} aumid={:?}", fmt_window(hwnd), aumid));
             } else if is_new
                 && winutil::is_app_window(hwnd)
