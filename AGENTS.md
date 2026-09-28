@@ -205,6 +205,8 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 - 改 CI 或构建命令 → 先读 `.github/workflows/ci.yml`
 - 改依赖或 release profile → 读 `Cargo.toml`；体积/内存口径参考
   docs/phase0b-acceptance.md §4（v1 §6 预算表已随 v1 存档于 git 历史）
+- 改产物元数据（版本资源/应用清单）→ 读 `build.rs`（任务 32；winresource
+  走 build-dependencies，`Cargo.toml` 与 `Cargo.lock` 必须同笔提交）
 - 实现新功能 → 在 docs/plan.md v2 §3 任务清单找到对应任务号，按任务号实现
   并单独提交；注入类条目不实现（路线 A 为备用，见 plan v2 §5）
 - 改双线路行为 → 读 src/winevent.rs（apply_ungroup / apply_group）与

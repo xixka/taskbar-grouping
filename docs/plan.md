@@ -261,6 +261,28 @@ CI 加固（26）全部 CI 绿灯；新增 31 项单元测试纳入 build job �
 审计 P2 中的工程建议（错误类型化 thiserror、stdout/stderr 分流、
 DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任务演进）。
 
+### Phase S — 杀软误报治理（2026-09-28 维护者指令：解决卡巴斯基报毒）
+
+- [x] **任务 32**：Kaspersky 等启发式引擎误报治理（产物元数据 + 上报路径）。
+      背景：发布物为"单文件 + strip + 未签名"小 exe，行为面天然贴近启发式
+      关注区（跨进程窗口 AUMID 改写 / 全局 SetWinEventHook / HKCU Run 自启 /
+      任务栏磁贴固定，均为公开文档 API），Kaspersky 会对此类"无版本信息 +
+      无清单 + 无签名"组合给出非特征性 generic 误报（UDS / PDM / Heur 类）。
+      落地（CI 编译验证，遵守禁止本地编译红线；每项独立提交）：
+      ① `build.rs`（winresource 0.1.31，default-features=false 仅引入
+      version_check 一个构建依赖，lockfile 增量最小）构建期嵌入
+      VERSIONINFO（描述/版本/版权/项目主页）与应用清单（asInvoker +
+      Win10/11 supportedOS）——纯资源注入、零运行时行为变化，非 Windows
+      目标直接返回；MSVC 目标经宿主 Windows SDK 的 rc.exe 编译 .res
+      （windows-latest 自带，无需安装）；
+      ② README 新增 "Antivirus false positives" 章节：误报成因、
+      SHA256SUMS + build-provenance 验真口径、Kaspersky OpenTip
+      （https://opentip.kaspersky.com/ ）误报上报路径；
+      ③ 资源体积增量约 1-2 KB（150 KB 实测基线，预算 0.5 MB 线内；
+      正式发布时由 release 工作流回填实测值）。遗留：代码签名证书可
+      根治此类告警（暂无赞助）；Kaspersky 库内白名单需维护者经
+      OpenTip 提交确认，属仓库外流程。
+
 ## §4 验收与测试（常态化）
 
 | 层面 | 方法 |
