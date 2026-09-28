@@ -25,6 +25,13 @@ windows = { version = "0.58", features = [
     "Win32_Globalization",           # GetUserDefaultUILanguage 菜单语言自动检测（任务 29）
 ] }
 
+# 任务 32：构建期嵌入 VERSIONINFO + 应用清单（winresource；MSVC 目标经宿主
+# Windows SDK 的 rc.exe 编译 .res，windows-latest 自带）。default-features =
+# false 关闭 toml 特性：仅引入 version_check 一个构建依赖，Cargo.lock 增量
+# 最小。见 build.rs。
+[build-dependencies]
+winresource = { version = "0.1", default-features = false }
+
 # 体积导向 release 配置（对应 docs/plan.md §6 预算：单文件 < 0.5 MB 目标）
 [profile.release]
 opt-level = "z"
