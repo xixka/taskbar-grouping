@@ -282,6 +282,12 @@ DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任
       正式发布时由 release 工作流回填实测值）。遗留：代码签名证书可
       根治此类告警（暂无赞助）；Kaspersky 库内白名单需维护者经
       OpenTip 提交确认，属仓库外流程。
+      修复轮（首推 run 36372461818）：set_manifest 的 RC 字符串块路线
+      经 CI 实测损坏清单，加载器报 SxS 14001（side-by-side，三 job
+      同因失败；lockfile 门禁同轮验证通过——手工锁文件与 cargo
+      generate-lockfile 输出完全一致）；改 set_manifest_file 文件直嵌
+      （`tbg-lite.exe.manifest` 入库，RC 语句 `1 24 "<file>"` 字节
+      原样拷贝），教训记入 build.rs 头注。
 
 ## §4 验收与测试（常态化）
 
