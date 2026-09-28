@@ -94,6 +94,42 @@ mods. Two things to keep in mind:
   acceptance suite (50-window stress per line, <10 MB memory gate, multi-app
   coverage, UIA taskbar-button dumps).
 
+## Antivirus false positives
+
+tbg-lite ships as a small, stripped, **unsigned** single-file exe, and its
+behavior profile is inherently close to what heuristic engines watch for:
+rewriting other processes' window properties (documented Shell property-store
+API), global `SetWinEventHook` listeners, per-user HKCU-Run autostart, and
+taskbar tile pinning. Engines that score behavior and heuristics — Kaspersky
+in particular — may therefore raise generic verdicts (e.g.
+`UDS:DangerousObject`, `PDM:Trojan.Win32.Generic`, `Heur.…`) on fresh
+builds. These are heuristic scores, not identifications of known malware.
+
+Mitigations in place (task 32):
+
+- Every build embeds a version resource (product name, file description,
+  version, copyright, project URL) and an application manifest
+  (`asInvoker`, Windows 10/11 `supportedOS`) — see `build.rs`.
+  Version-less, manifest-less exes score noticeably worse in heuristics.
+- Artifacts are built by GitHub Actions from the exact pushed commit and
+  carry a build-provenance attestation; `SHA256SUMS.txt` ships with every
+  stable release and dev artifact — verify before running.
+
+If Kaspersky flags a copy that matches `SHA256SUMS.txt`:
+
+1. Report it as a false positive via the
+   [Kaspersky OpenTip portal](https://opentip.kaspersky.com/) (submit the
+   file or its SHA256; confirmed false positives are typically cleared by a
+   database update within days), or use the report-a-false-positive action
+   in the product's Quarantine/Reports view.
+2. Until the verdict is cleared, add an exclusion for the verified file if
+   your policy allows it.
+3. Prefer the attested release builds over self-built exes — self-built
+   unsigned binaries always look more suspicious to heuristics.
+
+A code-signing certificate would remove most of this warning class; it is
+not planned for now, so verify-and-report is the supported path.
+
 ## Known limitations (route B+)
 
 - Explorer folder windows revert their AUMID (shell-managed). Since task 28
