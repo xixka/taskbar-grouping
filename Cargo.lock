@@ -41,6 +41,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tbg-inject"
+version = "0.1.0"
+dependencies = [
+ "tbg-proto",
+ "windows",
+ "winresource",
+]
+
+[[package]]
 name = "tbg-lite"
 version = "0.1.0"
 dependencies = [

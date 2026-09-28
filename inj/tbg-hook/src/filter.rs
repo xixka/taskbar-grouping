@@ -77,13 +77,22 @@ pub(crate) fn rewrite_aumid(orig: &str, hwnd: isize, s: &SharedState) -> String 
 }
 
 /// 线路一标记（appid.rs `suffixed_aumid` 隔离复刻）。
+///
+/// 文档口径 AUMID 字符集为 ASCII（`[A-Za-z0-9.\-]`），此处按字节计数
+/// 即码元计数；仍以 `char_indices` 逐字符截断防御非法输入——explorer
+/// 进程内任何 panic 都是进程级故障，无 unwind 可言。
 fn suffixed(orig: &str, hwnd: isize) -> String {
     let hex = format!("{:X}", hwnd as usize);
     let keep = AUMID_MAX_LEN
         .saturating_sub(SUFFIX_MARKER.len() + hex.len())
         .min(orig.len());
     let mut out = String::with_capacity(keep + SUFFIX_MARKER.len() + hex.len());
-    out.push_str(&orig[..keep]);
+    for (i, ch) in orig.char_indices() {
+        if i >= keep {
+            break;
+        }
+        out.push(ch);
+    }
     out.push_str(SUFFIX_MARKER);
     out.push_str(&hex);
     out

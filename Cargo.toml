@@ -44,4 +44,4 @@ panic = "abort"
 # 根包 tbg-lite 保持零注入（AGENTS.md 红线）；注入实现仅存在于 inj/ 下。
 # profile 上表工作区全成员生效（hook dll / inject exe 同样走体积导向）。
 [workspace]
-members = ["inj/tbg-proto", "inj/tbg-hook"]
+members = ["inj/tbg-proto", "inj/tbg-hook", "inj/tbg-inject"]

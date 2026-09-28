@@ -1,0 +1,23 @@
+[package]
+name = "tbg-inject"
+version = "0.1.0"
+edition = "2021"
+description = "Route A injection host: loads tbg_hook.dll into explorer and serves inject/stop/status (plan v2 SS5, task 35)"
+license = "MIT"
+publish = false
+
+[dependencies]
+tbg-proto = { path = "../tbg-proto" }
+windows = { version = "0.58", features = [
+    "Win32_Foundation",                   # HANDLE / CloseHandle / INVALID_HANDLE_VALUE
+    "Win32_System_LibraryLoader",         # GetModuleHandleW / LoadLibraryW / GetProcAddress
+    "Win32_System_Memory",                # 共享节 + VirtualAllocEx / WriteProcessMemory
+    "Win32_System_Threading",             # OpenProcess / CreateRemoteThread / Sleep
+    "Win32_System_Diagnostics_ToolHelp",  # explorer 模块枚举（远程基址定位）
+    "Win32_UI_WindowsAndMessaging",       # GetShellWindow / GetWindowThreadProcessId
+    "Win32_Globalization",                # 菜单语言自动检测（任务 29 同源）
+] }
+
+# 任务 32 同款资源配方（AV 误报治理；注入版同样携带可核验身份）
+[build-dependencies]
+winresource = { version = "0.1", default-features = false }
