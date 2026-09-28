@@ -1,0 +1,30 @@
+[package]
+name = "tbg-hook"
+version = "0.1.0"
+edition = "2021"
+description = "Route A in-process hook DLL: IAT redirection of shell32!SHGetPropertyStoreForWindow (plan v2 SS5, task 34)"
+license = "MIT"
+publish = false
+
+# cdylib：产物 tbg_hook.dll（被 tbg-inject 装入 explorer）。
+# 源码同时作为 crate 被本工作区测试编译（cargo test）。
+[lib]
+name = "tbg_hook"
+crate-type = ["cdylib"]
+
+[dependencies]
+tbg-proto = { path = "../tbg-proto" }
+windows = { version = "0.58", features = [
+    "Win32_Foundation",                   # BOOL / HINSTANCE / CloseHandle
+    "Win32_UI_Shell_PropertiesSystem",    # IPropertyStore（IID + 接口类型）
+    "Win32_UI_WindowsAndMessaging",       # 窗口过滤（GetAncestor / GetClassNameW ...）
+    "Win32_Storage_EnhancedStorage",      # PKEY_AppUserModel_ID（任务 5 同源）
+    "Win32_System_LibraryLoader",         # DisableThreadLibraryCalls / FreeLibraryAndExitThread
+    "Win32_System_Memory",                # OpenFileMappingW / MapViewOfFile / VirtualProtect
+    "Win32_System_Threading",             # GetCurrentProcessId / Sleep
+    "Win32_System_Diagnostics_ToolHelp",  # 模块枚举（IAT 扫描）
+] }
+
+# 任务 32 同款资源配方（AV 误报治理）：VERSIONINFO 直嵌
+[build-dependencies]
+winresource = { version = "0.1", default-features = false }

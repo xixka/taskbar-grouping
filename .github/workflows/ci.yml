@@ -21,12 +21,12 @@ jobs:
 
       # 任务 22b（审计 SEC-03）：Cargo.lock 已入库，--locked 保证可复现构建
       - name: Build (release, locked)
-        run: cargo build --release --locked
+        run: cargo build --release --locked --workspace
 
       # 任务 23（审计 P2-13）：纯逻辑单元测试（标记构造/剥离、还原表
       # 往返/损坏拒载、HWND 解析等；dev profile，panic=unwind 可测试）。
       - name: Unit tests
-        run: cargo test --locked
+        run: cargo test --locked --workspace
 
   # 任务 22b（审计 SEC-03）：Cargo.lock 新鲜度门禁。
   # lockfile 已入库：generate-lockfile 后工作树必须无 diff（依赖变更
@@ -60,7 +60,7 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (audit SEC-02: pinned)
 
       - name: Build (release, locked)
-        run: cargo build --release --locked
+        run: cargo build --release --locked --workspace
 
       - name: Runtime smoke (two strategy lines on real windows)
         run: powershell -NoProfile -ExecutionPolicy Bypass -File ci/runtime-smoke.ps1
@@ -88,7 +88,7 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (audit SEC-02: pinned)
 
       - name: Build (release, locked)
-        run: cargo build --release --locked
+        run: cargo build --release --locked --workspace
 
       - name: Phase 0b acceptance (stress / memory / coverage / UIA)
         run: powershell -NoProfile -ExecutionPolicy Bypass -File ci/phase0b-accept.ps1
@@ -122,7 +122,7 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (audit SEC-02: pinned)
 
       - name: Build (release, locked)
-        run: cargo build --release --locked
+        run: cargo build --release --locked --workspace
 
       - name: Package + SHA256
         shell: powershell
@@ -179,7 +179,7 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (audit SEC-02: pinned)
 
       - name: Build (release, locked)
-        run: cargo build --release --locked
+        run: cargo build --release --locked --workspace
 
       - name: Package + SHA256
         shell: powershell
