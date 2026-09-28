@@ -1,0 +1,47 @@
+// tbg-lite resource script (task 32: AV false-positive hardening).
+//
+// Compiled by rc.exe via winresource::set_resource_file (see build.rs).
+// The file content is fully self-managed: winresource only locates the
+// Windows SDK resource compiler and attaches the resulting .res to the
+// linker. Keep this file plain ASCII and free of any code-page pragma --
+// the RC text is fed to rc.exe verbatim.
+//
+// Version sync: FILEVERSION / PRODUCTVERSION / "FileVersion" /
+// "ProductVersion" below must track the Cargo.toml [package] version
+// (0.1.0 -> 0,1,0,0 / "0.1.0").
+
+#define RT_MANIFEST 24
+
+1 VERSIONINFO
+FILEVERSION     0,1,0,0
+PRODUCTVERSION  0,1,0,0
+FILEOS          0x40004
+FILETYPE        0x1
+FILEFLAGSMASK   0x3f
+FILEFLAGS       0x0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "000004b0"
+        BEGIN
+            VALUE "Comments", "Taskbar grouping via documented Shell property-store APIs. Source and CI builds: https://github.com/xixka/taskbar-grouping"
+            VALUE "CompanyName", "tbg-lite open-source project"
+            VALUE "FileDescription", "tbg-lite - Windows taskbar grouping controller"
+            VALUE "FileVersion", "0.1.0"
+            VALUE "InternalName", "tbg-lite"
+            VALUE "LegalCopyright", "MIT License - https://github.com/xixka/taskbar-grouping"
+            VALUE "OriginalFilename", "tbg-lite.exe"
+            VALUE "ProductName", "tbg-lite"
+            VALUE "ProductVersion", "0.1.0"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0000, 0x04b0
+    END
+END
+
+// Application manifest (resource ID 1 = CREATEPROCESS_MANIFEST_RESOURCE_ID).
+// rc.exe resolves this quoted relative path against the build script's
+// working directory, which is the package root.
+1 RT_MANIFEST "tbg-lite.exe.manifest"

@@ -282,12 +282,16 @@ DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任
       正式发布时由 release 工作流回填实测值）。遗留：代码签名证书可
       根治此类告警（暂无赞助）；Kaspersky 库内白名单需维护者经
       OpenTip 提交确认，属仓库外流程。
-      修复轮（首推 run 36372461818）：set_manifest 的 RC 字符串块路线
-      经 CI 实测损坏清单，加载器报 SxS 14001（side-by-side，三 job
-      同因失败；lockfile 门禁同轮验证通过——手工锁文件与 cargo
-      generate-lockfile 输出完全一致）；改 set_manifest_file 文件直嵌
-      （`tbg-lite.exe.manifest` 入库，RC 语句 `1 24 "<file>"` 字节
-      原样拷贝），教训记入 build.rs 头注。
+      修复轮（run 36372461818 → 36373209674，两轮均败于同因）：winresource
+      自动生成的 RC（强制 `#pragma code_page(65001)`；清单先走 RC 字符串
+      块、再走转义路径文件直嵌）两轮均使加载器报 SxS 14001（side-by-side
+      configuration is incorrect，三 job 同因失败；lockfile 门禁两轮均
+      绿——手工锁文件与 cargo generate-lockfile 输出一致）。终案对齐
+      alacritty 成熟方案：`set_resource_file` 整体自管 RC——`tbg-lite.rc`
+      入库（纯 ASCII、无 code-page pragma、BEGIN/END 块 + 相对路径引用
+      清单），winresource 仅负责定位 rc.exe 与挂接 .res；清单同步把
+      supportedOS 属性名修正为微软规范 `Id`（原误写 Guid）。教训记入
+      build.rs 头注。
 
 ## §4 验收与测试（常态化）
 
