@@ -7,6 +7,13 @@ API（`SHGetPropertyStoreForWindow` + `PKEY_AppUserModel_ID`）改写运行中�
 归属，不注入任何进程。实现路线与任务拆分见 `docs/plan.md`（v2，§2 路线 /
 §3 任务清单）。
 
+**双版本并行（2026-09-28 维护者决策，plan v2 §0-6/任务 33）**：在零注入主版本
+（`tbg-lite.exe`，`src/` 主包）之外，新增注入版独立产物
+（`tbg-inject.exe` + `tbg_hook.dll`，`inj/` 工作区成员）——路线 A 清室复刻：
+IAT 重定向 `shell32!SHGetPropertyStoreForWindow` + COM 委托属性存储，
+零私有符号、零 Windhawk 引用（GPL 红线，plan v2 §5/§6-1）。两版本互斥
+运行（同一任务栏二选一）；注入版无自启、无还原表（摘钩即回原状）。
+
 **双线路并行开发（2026-09-22 维护者决策）**：两条策略线路同时开工、同等维护，
 通过 CLI 参数切换（任务 8 已实现：`watch --strategy ungroup|group`）——
 
@@ -54,7 +61,8 @@ Ctrl+C console control handler 与 `--restore-on-exit` 方案作废
 严格校验、NAMECHANGE 重评估、inspect --json、restore --dry-run、
 actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI 门禁。
 详见 docs/plan.md v2 Phase R。
-据此：非注入 B+ 为主要路线，注入 A 为备用（plan v2 §5，不实现）；
+据此：非注入 B+ 为主要路线（2026-09-28 决策 6 起注入版 A 以独立产物并行，
+见"项目定位"与 plan v2 §0-6/§5——注入代码仅存在于 `inj/` 成员）；
 默认行为 = Disable grouping on the taskbar，无排除列表；后续任务一律
 按 plan v2 §3 任务清单立项。
 
@@ -184,8 +192,13 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
    
 ## 硬约束（红线）
 
-- 禁止注入路线代码：DLL 注入、`SetWindowsHookEx` 注入、inline hook、内存补丁、
-  符号解析 hook——路线 B+ 零注入是项目边界（docs/plan.md §4）。
+- 注入路线代码边界（2026-09-28 决策 6 改写，原"禁止一切注入路线代码"作废）：
+  注入实现**仅允许存在于 `inj/` 工作区成员**（tbg-proto / tbg-hook / tbg-inject），
+  技术形态限定为本版选型（`CreateRemoteThread` 注入 + IAT 重定向 + COM 委托）；
+  `src/` 主包（tbg-lite）保持零注入；`SetWindowsHookEx` 跨进程注入、inline hook、
+  内存补丁、私有符号/偏移解析仍禁（无清室实现依据）；注入实现禁止引用
+  Windhawk mod 代码或 v1 符号表（GPL 清室红线，plan v2 §6-1）；
+  注入版不提供自启注册，仅用户显式启动。
 - 禁止弱化或删除 CI 步骤 / 验证断言；验证失败只能修复，最多 3 轮。
 - 禁止本地编译或本地运行 cargo。
 - 禁止提交机密（令牌、密钥、私有配置）。

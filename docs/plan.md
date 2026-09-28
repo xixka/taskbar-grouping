@@ -20,6 +20,17 @@
    **不需要 Ctrl+C**——退出走菜单 `[0]`（优雅停止 watch：摘钩 + 统计输出，
    可选先还原）；带参数启动 = CLI 行为不变。原任务的 Ctrl+C console
    control handler 与 `--restore-on-exit` 参数方案作废。
+6. **双版本并行发布：非注入版（tbg-lite）为主，注入版（tbg-inject）为独立
+   产物**（2026-09-28 维护者指令"生成 2 个 exe 版本，一个注入，一个非注入"，
+   推翻决策 2 的"A 不实现"与 §5 存档状态）。立项评审三项结论（§5 重写）：
+   ① GPL——注入版采用**清室设计**（IAT 重定向公开导出
+   `shell32!SHGetPropertyStoreForWindow` + COM 委托属性存储，全部公开文档
+   API，零引用 Windhawk mod 逻辑与 v1 符号表），MIT 不受传染；② 杀软——
+   注入版**预期会被启发式引擎报毒**（DLL 注入 explorer 属引擎重点行为面，
+   这是真实行为特征而非误报），只经独立 zip 通道发布并附验真口径；③ 维护
+   成本——不依赖私有符号/偏移，按导入名解析，Windows 更新适配成本最小化。
+   红线同步改写（§2）：注入代码**仅允许存在于 `inj/` 工作区成员**，
+   `tbg-lite` 主包保持零注入。
 
 ## §1 现状（截至任务 15-20 全部完成，含 Phase R 22-26）
 
@@ -46,8 +57,13 @@
 - **主线**：路线 B+ 双线路（零注入）。只用公开文档 API
   （`SHGetPropertyStoreForWindow` + `PKEY_AppUserModel_ID` + `SetWinEventHook`
   out-of-context）。默认 `watch` 即"取消分组"；自定义分组经 `--strategy group`。
-- **红线**（继承 AGENTS.md）：禁止一切注入路线代码（DLL 注入 / `SetWindowsHookEx`
-  注入 / inline hook / 内存补丁 / 符号解析 hook）；禁本地编译；验证失败最多修 3 轮。
+- **红线**（继承 AGENTS.md，2026-09-28 决策 6 改写）：**注入路线代码仅允许存在于
+  `inj/` 工作区成员**（tbg-proto / tbg-hook / tbg-inject，含 DLL 注入与 IAT
+  重定向），`tbg-lite` 主包（`src/`）保持零注入；注入版不提供自启注册、仅用户
+  显式启动；注入实现禁止引用 Windhawk mod 代码或 v1 私有符号表（GPL 清室
+  红线，见 §6-1）；禁本地编译；验证失败最多修 3 轮。禁止
+  `SetWindowsHookEx` 跨进程注入与 inline hook / 内存补丁（本版技术选型为
+  IAT 重定向，见 §5——其余注入机制无清室实现依据，仍禁）。
 - **已知限制**（验收报告 §3/§5）：Explorer 文件夹窗口回写 AUMID；UWP/Chromium 长时
   行为未验证；新窗口竞态（先并组后跳变）待真机感知评估；任务栏图标/跳转列表纠偏无
   （B+ 无翻译层钩子，属路线 A 能力）。
@@ -293,6 +309,30 @@ DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任
       supportedOS 属性名修正为微软规范 `Id`（原误写 Guid）。教训记入
       build.rs 头注。
 
+### Phase A — 注入版双轨（2026-09-28 维护者指令：生成注入/非注入两个 exe）
+
+- [x] **任务 33**（治理先行）：路线 A 重启的决策记录（§0-6）+ 红线改写（§2 /
+  AGENTS.md 同步）+ 立项评审三项结论落档（§5 重写 + §6-1 GPL 复核）。
+      注入版边界同时定型：`inj/` 工作区成员独立成包；不提供 `install`
+      自启（与 B+ 差异化，AV 行为面收敛）；无还原表（不写真实属性，
+      摘钩即回原状）；与 tbg-lite watch 互斥运行（README 口径）。
+- [ ] **任务 34**：`inj/tbg-proto`（双进程共享内存协议 crate）+
+      `inj/tbg-hook`（cdylib：DllMain 空载 + 导出 init/stop + IAT 重定向
+      `SHGetPropertyStoreForWindow` + COM 委托 IPropertyStore（PKEY_
+      AppUserModel_ID 改写）+ 应用窗口过滤复刻 + 统计上报）。工作区化
+      Cargo.toml + 锁文件同笔更新 + CI `--workspace` 化。
+- [ ] **任务 35**：`inj/tbg-inject` 注入宿主（explorer PID 定位 + 远程
+      LoadLibraryW/init/stop 三段式 + 共享内存宿主侧 + `inject`/`stop`/
+      `status` CLI + 双语交互菜单）。
+- [ ] **任务 36**：CI 双产物流水线——build/lockfile/runtime-smoke/
+      phase0b 四门禁 workspace 化；runtime-smoke 新增 Phase INJ（注入版
+      端到端：基线合并 → 注入后独立按钮 → 摘钩复原 → explorer 重启重注入）；
+      dev/release 双 zip（tbg-lite 单 exe / tbg-inject exe+dll）+ 双
+      attestation。
+- [ ] **任务 37**：双版本文档补全——README 注入版章节（用法/风险/杀软
+      预期/验真）、BENCHMARK 注入版行（CI 回填）、AGENTS 目录导览与构建
+      命令同步、plan §3/§4 回填关闭。
+
 ## §4 验收与测试（常态化）
 
 | 层面 | 方法 |
@@ -303,19 +343,43 @@ DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任
 | 真机清单 | 竞态感知率、覆盖矩阵全量、长时回写、视觉细节、explorer 重启（验收报告 §5） |
 | 内存/体积 | 验收报告口径；发布前回填 `BENCHMARK.md`（任务 21） |
 
-## §5 备用路线 A（注入复刻）——不实现，仅存档
+## §5 注入版路线 A（Phase A，2026-09-28 重启实现——原"不实现仅存档"作废）
 
-- 触发条件：真机覆盖矩阵（任务 15）证实 B+ 覆盖 <90%，或竞态可感知率 ≥5% 且无法在
-  B+ 框架内缓解（如重试/双重写策略）。
-- 参考架构：plan v1 §5（tbg-host + tbg-hook 双组件、符号链路）与 §6（体积内存预算）、
-  v1 §2.1（Windhawk mod 32 符号钩子拆解）——见 git 历史。
-- 启动 A 前须重新立项评审：GPL-3.0 传染、杀软误报、Windows 更新维护成本三项
-  （v1 §3.3）。
+- **决策**：维护者 2026-09-28 指令"生成 2 个 exe 版本"（§0-6）。原触发条件
+  （B+ 覆盖 <90% / 竞态 ≥5%）与 v1 参考架构（符号链路）不再适用。
+- **清室架构**（与 v1/Windhawk 符号钩子路线的实质差异）：不解析任何私有符号、
+  不做 inline hook / 内存补丁——宿主 `tbg-inject.exe` 经
+  `CreateRemoteThread + LoadLibraryW` 把 `tbg_hook.dll` 装入 explorer，
+  再远程调用其导出 `tbg_hook_init`；DLL 遍历本进程模块导入表，将
+  `shell32.dll!SHGetPropertyStoreForWindow` 的 **IAT 槽位**重定向到自有
+  桩函数；桩函数调用原函数后，把返回的 `IPropertyStore` 包进**委托对象**
+  （COM 聚合语义的最小实现），仅对 `PKEY_AppUserModel_ID` 的
+  `GetValue` 注入线路语义（线路一 `~TBG~w<HWND>` 后缀 / 线路二
+  `TBG.Group.<NAME>` 共享值），其余键原样透传。任务栏在进程内读到改写后
+  的 AUMID——**零属性回写竞争**（B+ 的已知竞态在 A 中结构性消失）。
+- **立项评审三项**（决策 6）：GPL——零 Windhawk/v1 引用，公开文档 API 直译，
+  MIT 不传染（§6-1 前提重评通过）；杀软——注入版预期报毒（真实行为特征），
+  独立 zip 通道 + README 风险声明 + 验真口径；维护成本——导入名解析无符号
+  依赖，Windows 更新零偏移适配。
+- **已知限制**（Phase A 立项时点）：① 若任务栏读 AUMID 不经
+  `SHGetPropertyStoreForWindow` 导入（运行时 GetProcAddress / delay-load /
+  内部直读窗口属性），IAT 槽位补丁数与拦截计数将为 0——Phase INJ 断言
+  直接暴露该情形，后续以诊断证据决定二级路线（如 GetPropW 观测）；
+  ② 卸载竞态：摘钩后 1.5 s 宽限再 FreeLibrary，理论上存在在途调用窗口
+  （业界同类工具普遍常驻规避，本版选择完整卸载 + 宽限，残余风险文档化）；
+  ③ 注入版 stub 在 explorer 进程内运行，其代码缺陷可能拖垮 explorer
+  （CI 门禁 + 最小化 stub 逻辑缓解）；④ 不做 explorer 重启自动重注入
+  （宿主非常驻；重启后需手动再 inject，Phase INJ 断言该路径可用）。
+- v1 原文（符号链路架构、预算表、mod 拆解）仍存档于 git 历史 commit
+  8e09b0e，仅供历史参考，**禁止实现引用**（GPL 红线）。
 
 ## §6 开放问题（2026-09-23 任务 21 收尾决议）
 
 1. **已决**：LICENSE = MIT（任务 21；零注入路线未引用 mod 逻辑代码，GPL 不
-   传染；若未来引用 mod 逻辑描述再重评）。
+   传染；若未来引用 mod 逻辑描述再重评）。**2026-09-28 复核（决策 6/任务
+   33）**：注入版重启后此结论仍成立——Phase A 为清室设计（§5），未引用
+   Windhawk mod 逻辑、v1 符号表或任何 GPL 代码；后续注入相关改动维持
+   零引用红线，若需参考 mod 行为须先重评许可。
 2. **维持不需要**：配置文件（全 CLI 参数 + 无排除列表决策不变；覆盖矩阵
    回填后唯一回写行为 shell 自管 Explorer 文件夹窗口，属路线边界非配置
    可解——plan v2 §2 已知限制）。
