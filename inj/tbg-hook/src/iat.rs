@@ -571,11 +571,10 @@ mod tests {
     }
 
     /// 自检锚点存在性：本 DLL 导入表经 install() 计入 self_slots
-    /// （CI 上以状态输出验证 >= 1；此处钉常量与锚点声明同源）。
+    /// （CI 上以状态输出验证 >= 1；此处钉常量与外部 API 名长度一致：
+    /// "SHGetPropertyStoreForWindow" = 27 字符）。
     #[test]
     fn self_import_anchor_declared() {
-        // 锚点在 lib.rs（extern + #[used] static）；本测试钉目标常量长度
-        // 与外部 API 名一致性（26 字符 + NUL 由匹配器处理）。
-        assert_eq!(TARGET_FN.len(), 26);
+        assert_eq!(TARGET_FN.len(), 27);
     }
 }
