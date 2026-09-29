@@ -986,16 +986,14 @@ try {
   }
 
   # --- inject (line-1 equivalent: ungroup) ---
-  # 诊断（修复轮 3）：inject 输出内嵌实时槽位计数；explorer pid 前后
-  # 追踪——inject 成功后 pid 变化 = 崩溃重启的直接证据。
-  $pidBefore = (Get-Process -Name explorer -ErrorAction SilentlyContinue | Select-Object -First 1).Id
-  Log "inj: explorer pid before inject: $pidBefore"
+  # task 36 round 3 diagnostics (ascii only): the inject output carries the
+  # live slot counters (scanned/patched/delay/gpa/self/names + generation);
+  # the pid pair across the call reveals an explorer crash-restart.
+  $expB = (Get-Process -Name explorer -ErrorAction SilentlyContinue | Select-Object -First 1).Id
   $inj1 = & $exeInj inject | Out-String
-  $inj1flat = $inj1 -replace "`r|`n", ' '
-  Log "inj inject output: $inj1flat"
-  $pidAfter = (Get-Process -Name explorer -ErrorAction SilentlyContinue | Select-Object -First 1).Id
-  Log "inj: explorer pid after inject: $pidAfter (before: $pidBefore)"
-  if ($pidBefore -ne $pidAfter) { Log "inj: !!! explorer RESTARTED across inject — crash evidence !!!" }
+  Log "inj inject output >>> $inj1"
+  $expA = (Get-Process -Name explorer -ErrorAction SilentlyContinue | Select-Object -First 1).Id
+  Log "inj: explorer pid before=$expB after=$expA"
   Assert (($LASTEXITCODE -eq 0) -and ($inj1 -cmatch 'inject: ok')) 'inj: inject exits 0 with "inject: ok"'
   $st1 = & $exeInj status | Out-String
   $st1flat = $st1 -replace "`r|`n", ' '
@@ -1058,23 +1056,10 @@ try {
   $st4 = & $exeInj status | Out-String
   Assert ($st4 -cmatch 'state\s*:\s*detached') 'inj: after explorer restart status is detached (hook died with the old shell, section lifetime tied to views)'
   $inj2 = & $exeInj inject | Out-String
+  Log "inj re-inject output >>> $inj2"
   Assert (($LASTEXITCODE -eq 0) -and ($inj2 -cmatch 'inject: ok')) 'inj: re-inject into the new explorer succeeds'
   $sp2 = & $exeInj stop | Out-String
   Assert (($LASTEXITCODE -eq 0) -and ($sp2 -cmatch 'stop: ok')) 'inj: stop after re-inject exits 0'
-
-  # --- crash evidence (task 36 round 3, diagnostics only) ---
-  # Application 错误日志（Event 1000 = 应用崩溃，含故障模块名）——
-  # 区分"explorer 崩溃重启"与"活进程中 DLL 消失"两条故障路径。
-  try {
-    $evts = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Level = 2; StartTime = (Get-Date).AddMinutes(-10) } -MaxEvents 12 -ErrorAction SilentlyContinue
-    if ($evts) {
-      foreach ($e in $evts) {
-        $msg = if ($e.Message) { ($e.Message -replace "`r|`n", ' ') } else { '(no message)' }
-        if ($msg.Length -gt 220) { $msg = $msg.Substring(0, 220) }
-        Log "inj eventlog: [$($e.Id)] $($e.ProviderName) :: $msg"
-      }
-    } else { Log 'inj eventlog: no application errors in the last 10 minutes' }
-  } catch { Log "inj eventlog dump failed (non-fatal): $($_.Exception.Message)" }
 } catch {
   Fail "phase INJ crashed: $($_.Exception.Message)"
   Log $_.ScriptStackTrace
