@@ -323,7 +323,10 @@ unsafe extern "system" fn proxy_get_value_and_state(
     if key.is_null() || ppropvar.is_null() || pstate.is_null() {
         return E_POINTER;
     }
-    let vt = me.inner as *mut *const InnerVtbl;
+    if me.inner_cache.is_null() {
+        return E_NOINTERFACE;
+    }
+    let vt = me.inner_cache as *mut *const InnerVtbl;
     let hr = ((*(*vt)).get_value_and_state)(me.inner_cache, key, ppropvar, pstate);
     if hr.is_ok() && *key == PKEY_AppUserModel_ID {
         let s = &*me.shared;
@@ -356,7 +359,10 @@ unsafe extern "system" fn proxy_set_state(
     if key.is_null() {
         return E_POINTER;
     }
-    let vt = me.inner as *mut *const InnerVtbl;
+    if me.inner_cache.is_null() {
+        return E_NOINTERFACE;
+    }
+    let vt = me.inner_cache as *mut *const InnerVtbl;
     ((*(*vt)).set_state)(me.inner_cache, key, state)
 }
 
@@ -371,6 +377,9 @@ unsafe extern "system" fn proxy_set_value_and_state(
     if key.is_null() || val.is_null() {
         return E_POINTER;
     }
-    let vt = me.inner as *mut *const InnerVtbl;
+    if me.inner_cache.is_null() {
+        return E_NOINTERFACE;
+    }
+    let vt = me.inner_cache as *mut *const InnerVtbl;
     ((*(*vt)).set_value_and_state)(me.inner_cache, key, val, state)
 }
