@@ -30,8 +30,7 @@ use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use windows::core::{HRESULT, Interface, PCSTR};
 use windows::Win32::Foundation::{BOOL, E_POINTER, FARPROC, HINSTANCE, HMODULE, HWND};
 use windows::Win32::System::LibraryLoader::{
-    DisableThreadLibraryCalls, FreeLibrary, FreeLibraryAndExitThread, GetModuleFileNameW,
-    LoadLibraryW,
+    DisableThreadLibraryCalls, FreeLibraryAndExitThread, GetModuleFileNameW, LoadLibraryW,
 };
 use windows::Win32::System::Memory::{MapViewOfFile, OpenFileMappingW, FILE_MAP_READ, FILE_MAP_WRITE};
 use windows::Win32::System::Threading::{GetCurrentProcessId, Sleep};
@@ -298,9 +297,13 @@ pub unsafe extern "system" fn tbg_hook_stop(_param: *mut c_void) -> u32 {
     // plan v2 §5 已知限制②；业界同类工具多以常驻规避，本版选择完整卸载）。
     Sleep(1500);
     let hmod = HMODULE(SELF_MODULE.load(Ordering::Relaxed) as *mut c_void);
-    // 两段释放：先撤 init 的自钉扎（+1），再撤远程 LoadLibraryW 的装载
-    // 引用（+1）并随线程退出——引用计数归零，DLL 干净卸载。
-    let _ = FreeLibrary(hmod);
+    // 卸载走单段 FreeLibraryAndExitThread（对任意计数安全：原子化
+    // "递减 + 线程退出"，计数归零时卸载发生在本线程退出之后）。**不做**
+    // 先行 FreeLibrary 再 FAET 的两段式——若外部发生过引用递减，先行
+    // FreeLibrary 可能当场归零并解除映射，后续指令在死代码上执行。
+    // 自钉扎的代价：正常路径（计数 2）下 FAET 后余 1，模块以"补丁已摘、
+    // 状态 UNLOADED"的惰性形态驻留至 explorer 重启——功能正确（分组
+    // 已回原生），残留为文档化的已知取舍。
     FreeLibraryAndExitThread(hmod, STOP_OK);
     // FreeLibraryAndExitThread 不返回；显式收尾值仅为满足返回类型。
     STOP_OK

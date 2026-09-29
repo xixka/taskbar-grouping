@@ -266,7 +266,7 @@ pub(crate) fn do_stop() -> Result<String, String> {
             return Err(format!("stop: hook stop returned {code}"));
         }
         let mut msg = format!(
-            "stop: ok — hooks removed, dll unloaded (generation {})\n",
+            "stop: ok — hooks removed, dll unload best-effort (generation {})\n",
             s.generation.load(std::sync::atomic::Ordering::Relaxed)
         );
         msg.push_str(&fmt_traffic_line(s));
