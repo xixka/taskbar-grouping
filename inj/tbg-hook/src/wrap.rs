@@ -25,7 +25,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use windows::core::{BSTR, GUID, HRESULT, IUnknown, Interface, PROPVARIANT};
 use windows::Win32::Foundation::{E_NOINTERFACE, E_POINTER, S_OK, HWND};
 use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
-use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY};
+use windows::Win32::UI::Shell::PropertiesSystem::{
+    IPropertyStore, IPropertyStoreCache, PSC_STATE, PROPERTYKEY,
+};
 
 use tbg_proto::{SharedState, STATE_ACTIVE};
 
@@ -38,6 +40,10 @@ struct ProxyStore {
     refs: AtomicU32,
     /// 被委托的真实 IPropertyStore 接口指针（自有 1 引用）。
     inner: *mut c_void,
+    /// inner 经其自身 QI 取得的 IPropertyStoreCache 指针（QI 自带 1 引用；
+    /// null = inner 不实现该接口，代理亦不对外宣告）。cache 槽位委托至此，
+    /// 而非 inner store 指针——接口层级指针不保证同一。
+    inner_cache: *mut c_void,
     /// 请求该存储的窗口（线路一后缀用）。
     hwnd: isize,
     /// 共享状态（策略 + 统计；指向宿主节映射，DLL 生命周期内有效）。
@@ -48,6 +54,11 @@ struct ProxyStore {
 /// PropertiesSystem 生成源码）：IUnknown(3) + GetCount + GetAt +
 /// GetValue + SetValue + Commit。**GetCount/GetAt 槽位必须存在**——
 /// 任务栏枚举属性时会调用它们，缺失会导致以错位参数跳进 GetValue。
+/// 任务 36 修复轮 6：扩展至 IPropertyStoreCache（propsys 存储实际实现
+/// 的超集接口；run 36532473377 实测 wrapped=2 而 GetValue 从未被调——
+/// 任务栏 QI IPropertyStoreCache 遭 E_NOINTERFACE 拒绝后放弃读取）。
+/// 槽序（0.58 生成源码逐字对照）：GetState + GetValueAndState +
+/// SetState + SetValueAndState。
 #[repr(C)]
 struct ProxyVtbl {
     query_interface:
@@ -62,14 +73,30 @@ struct ProxyVtbl {
     set_value:
         unsafe extern "system" fn(*mut ProxyStore, *const PROPERTYKEY, *const PROPVARIANT) -> HRESULT,
     commit: unsafe extern "system" fn(*mut ProxyStore) -> HRESULT,
+    get_state:
+        unsafe extern "system" fn(*mut ProxyStore, *const PROPERTYKEY, *mut PSC_STATE) -> HRESULT,
+    get_value_and_state: unsafe extern "system" fn(
+        *mut ProxyStore,
+        *const PROPERTYKEY,
+        *mut PROPVARIANT,
+        *mut PSC_STATE,
+    ) -> HRESULT,
+    set_state:
+        unsafe extern "system" fn(*mut ProxyStore, *const PROPERTYKEY, PSC_STATE) -> HRESULT,
+    set_value_and_state: unsafe extern "system" fn(
+        *mut ProxyStore,
+        *const PROPERTYKEY,
+        *const PROPVARIANT,
+        PSC_STATE,
+    ) -> HRESULT,
 }
 
 /// inner 接口的原始 vtable 视图（调用被委托实现，不经 windows crate
 /// 生成签名——原始 COM 原型零歧义）。
 #[repr(C)]
 struct InnerVtbl {
-    /// QueryInterface 槽：不透传（QI 策略见模块注释），仅占位保布局。
-    _query_interface: usize,
+    query_interface:
+        unsafe extern "system" fn(*mut c_void, *const GUID, *mut *mut c_void) -> HRESULT,
     add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
     release: unsafe extern "system" fn(*mut c_void) -> u32,
     get_count: unsafe extern "system" fn(*mut c_void, *mut u32) -> HRESULT,
@@ -79,7 +106,23 @@ struct InnerVtbl {
     set_value:
         unsafe extern "system" fn(*mut c_void, *const PROPERTYKEY, *const PROPVARIANT) -> HRESULT,
     commit: unsafe extern "system" fn(*mut c_void) -> HRESULT,
-    // IPropertyStore 之后的方法槽不透传（见 QI 策略），不声明。
+    get_state:
+        unsafe extern "system" fn(*mut c_void, *const PROPERTYKEY, *mut PSC_STATE) -> HRESULT,
+    get_value_and_state: unsafe extern "system" fn(
+        *mut c_void,
+        *const PROPERTYKEY,
+        *mut PROPVARIANT,
+        *mut PSC_STATE,
+    ) -> HRESULT,
+    set_state:
+        unsafe extern "system" fn(*mut c_void, *const PROPERTYKEY, PSC_STATE) -> HRESULT,
+    set_value_and_state: unsafe extern "system" fn(
+        *mut c_void,
+        *const PROPERTYKEY,
+        *const PROPVARIANT,
+        PSC_STATE,
+    ) -> HRESULT,
+    // IPropertyStoreCache 之后的方法槽不透传（见 QI 策略），不声明。
 }
 
 static PROXY_VTBL: ProxyVtbl = ProxyVtbl {
@@ -91,9 +134,15 @@ static PROXY_VTBL: ProxyVtbl = ProxyVtbl {
     get_value: proxy_get_value,
     set_value: proxy_set_value,
     commit: proxy_commit,
+    get_state: proxy_get_state,
+    get_value_and_state: proxy_get_value_and_state,
+    set_state: proxy_set_state,
+    set_value_and_state: proxy_set_value_and_state,
 };
 
 /// 构造委托对象：对 inner 自持一个引用，返回 COM 指针（refs = 1）。
+/// 同时探测 inner 的 IPropertyStoreCache 能力（经其自身 QI；成功则
+/// 缓存该接口指针供 cache 槽位委托）。
 pub(crate) unsafe fn proxy_new(
     inner: *mut c_void,
     hwnd: HWND,
@@ -101,10 +150,17 @@ pub(crate) unsafe fn proxy_new(
 ) -> *mut c_void {
     let vt = inner as *mut *const InnerVtbl;
     ((*(*vt)).add_ref)(inner); // 自持一个 inner 引用
+    let mut inner_cache: *mut c_void = std::ptr::null_mut();
+    let _ = ((*(*vt)).query_interface)(
+        inner,
+        &IPropertyStoreCache::IID,
+        &mut inner_cache as *mut *mut c_void,
+    ); // 成功时 QI 自带 1 引用；失败保持 null
     Box::into_raw(Box::new(ProxyStore {
         vtbl: &PROXY_VTBL,
         refs: AtomicU32::new(1),
         inner,
+        inner_cache,
         hwnd: hwnd.0 as isize,
         shared,
     })) as *mut c_void
@@ -119,6 +175,11 @@ unsafe extern "system" fn proxy_query_interface(
         return E_POINTER;
     }
     if *iid == IPropertyStore::IID || *iid == IUnknown::IID {
+        proxy_add_ref(this);
+        *out = this as *mut c_void;
+        S_OK
+    } else if *iid == IPropertyStoreCache::IID && !(*this).inner_cache.is_null() {
+        // 仅当 inner 真实实现该接口（构造时 QI 探测成功）才宣告
         proxy_add_ref(this);
         *out = this as *mut c_void;
         S_OK
@@ -137,7 +198,11 @@ unsafe extern "system" fn proxy_release(this: *mut ProxyStore) -> u32 {
     let me = &*this;
     let left = me.refs.fetch_sub(1, Ordering::AcqRel);
     if left == 1 {
-        // 释放 inner 的自有引用，再销毁自身
+        // 释放 inner 的自有引用（store 与 cache 各一），再销毁自身
+        if !me.inner_cache.is_null() {
+            let vtc = me.inner_cache as *mut *const InnerVtbl;
+            ((*(*vtc)).release)(me.inner_cache);
+        }
         let vt = me.inner as *mut *const InnerVtbl;
         ((*(*vt)).release)(me.inner);
         drop(Box::from_raw(this));
@@ -225,4 +290,87 @@ unsafe extern "system" fn proxy_commit(this: *mut ProxyStore) -> HRESULT {
     let me = &*this;
     let vt = me.inner as *mut *const InnerVtbl;
     ((*(*vt)).commit)(me.inner)
+}
+
+// ---------------- IPropertyStoreCache 扩展（任务 36 修复轮 6） ----------------
+
+/// GetState 透传。
+unsafe extern "system" fn proxy_get_state(
+    this: *mut ProxyStore,
+    key: *const PROPERTYKEY,
+    state: *mut PSC_STATE,
+) -> HRESULT {
+    let me = &*this;
+    if key.is_null() || state.is_null() {
+        return E_POINTER;
+    }
+    if me.inner_cache.is_null() {
+        return E_NOINTERFACE;
+    }
+    let vt = me.inner_cache as *mut *const InnerVtbl;
+    ((*(*vt)).get_state)(me.inner_cache, key, state)
+}
+
+/// GetValueAndState：值路径与 GetValue 同一改写语义（任务栏经 cache
+/// 接口读 AUMID 的路径），state 原样透传。
+unsafe extern "system" fn proxy_get_value_and_state(
+    this: *mut ProxyStore,
+    key: *const PROPERTYKEY,
+    ppropvar: *mut PROPVARIANT,
+    pstate: *mut PSC_STATE,
+) -> HRESULT {
+    let me = &*this;
+    if key.is_null() || ppropvar.is_null() || pstate.is_null() {
+        return E_POINTER;
+    }
+    let vt = me.inner as *mut *const InnerVtbl;
+    let hr = ((*(*vt)).get_value_and_state)(me.inner_cache, key, ppropvar, pstate);
+    if hr.is_ok() && *key == PKEY_AppUserModel_ID {
+        let s = &*me.shared;
+        if s.enabled.load(Ordering::Acquire) == 1
+            && s.state.load(Ordering::Acquire) == STATE_ACTIVE
+        {
+            // inner 已把值写入调用方缓冲；就地读出 → 改写 → 归还所有权
+            let inner_pv = ptr::read(ppropvar);
+            let orig: String = BSTR::try_from(&inner_pv)
+                .map(|b| b.to_string())
+                .unwrap_or_default();
+            let modified = filter::rewrite_aumid(&orig, me.hwnd, s);
+            let new_pv = PROPVARIANT::from(modified.as_str());
+            s.aumid_served.fetch_add(1, Ordering::Relaxed);
+            drop(inner_pv);
+            ptr::write(ppropvar, new_pv);
+            return S_OK;
+        }
+    }
+    hr
+}
+
+/// SetState 透传。
+unsafe extern "system" fn proxy_set_state(
+    this: *mut ProxyStore,
+    key: *const PROPERTYKEY,
+    state: PSC_STATE,
+) -> HRESULT {
+    let me = &*this;
+    if key.is_null() {
+        return E_POINTER;
+    }
+    let vt = me.inner as *mut *const InnerVtbl;
+    ((*(*vt)).set_state)(me.inner_cache, key, state)
+}
+
+/// SetValueAndState 透传（路线 A 永不写真实属性）。
+unsafe extern "system" fn proxy_set_value_and_state(
+    this: *mut ProxyStore,
+    key: *const PROPERTYKEY,
+    val: *const PROPVARIANT,
+    state: PSC_STATE,
+) -> HRESULT {
+    let me = &*this;
+    if key.is_null() || val.is_null() {
+        return E_POINTER;
+    }
+    let vt = me.inner as *mut *const InnerVtbl;
+    ((*(*vt)).set_value_and_state)(me.inner_cache, key, val, state)
 }
