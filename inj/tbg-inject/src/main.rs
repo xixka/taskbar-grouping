@@ -189,14 +189,18 @@ pub(crate) fn do_inject(group: Option<&str>) -> Result<String, String> {
 
         let code = injector::call_remote_export(pid, &dll, b"tbg_hook_init\0")?;
         if code != INIT_OK && code != INIT_ALREADY {
-            // 诊断面板（任务 36 修复：一次运行拿到全部判据，无需二次 status）
+            // 诊断面板（任务 36 修复轮 2：一次运行拿到全部判据）
             return Err(format!(
-                "inject: hook init failed (code {code}) — state={} err={} gen={} scanned={} patched={} section={} dll={}",
+                "inject: hook init failed (code {code}) — state={} err={} gen={} scanned={} patched={} delay={} gpa={} self={} names={} section={} dll={}",
                 s.state_name(),
                 s.err,
                 s.generation.load(std::sync::atomic::Ordering::Relaxed),
                 s.modules_scanned,
                 s.slots_patched,
+                s.delay_slots,
+                s.gpa_slots,
+                s.self_slots,
+                s.names_seen,
                 if section_existed { "pre-existing" } else { "fresh" },
                 dll.display(),
             ));
@@ -312,11 +316,16 @@ fn fmt_pid(pid: Option<u32>) -> String {
     }
 }
 
-/// `hook :` 行（注入/状态共用）。
+/// `hook :` 行（注入/状态共用；任务 36 修复轮 2 起含三层拦截面明细）。
 pub(crate) fn fmt_hook_line(s: &SharedState) -> String {
     let mut line = format!(
-        "hook   : modules scanned={} patched={}\n",
-        s.modules_scanned, s.slots_patched
+        "hook   : modules scanned={} patched={} delay={} gpa={} self={} names={}\n",
+        s.modules_scanned,
+        s.slots_patched,
+        s.delay_slots,
+        s.gpa_slots,
+        s.self_slots,
+        s.names_seen
     );
     let names = patched_names(s);
     if !names.is_empty() {
@@ -403,6 +412,10 @@ mod tests {
         s.state = AtomicU32::new(STATE_ACTIVE);
         s.modules_scanned = 142;
         s.slots_patched = 4;
+        s.delay_slots = 2;
+        s.gpa_slots = 12;
+        s.self_slots = 1;
+        s.names_seen = 5150;
         s.patched[0].name[..6].copy_from_slice(b"shell3"); // 演示名（截断展示）
         s.patched[0].name[6] = b'2';
         s.patched[0].name[7] = 0;
@@ -412,7 +425,7 @@ mod tests {
         s.mode = MODE_GROUP;
         let out = fmt_status(&s, Some(4816));
         assert!(out.contains("state   : active (generation 0)"), "{out}");
-        assert!(out.contains("hook   : modules scanned=142 patched=4"), "{out}");
+        assert!(out.contains("hook   : modules scanned=142 patched=4 delay=2 gpa=12 self=1 names=5150"), "{out}");
         assert!(out.contains("calls=214"), "{out}");
         assert!(out.contains("aumid-served=63"), "{out}");
         assert!(out.contains("strategy=group"), "{out}");

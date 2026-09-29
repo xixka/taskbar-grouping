@@ -27,8 +27,8 @@ use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
 // 0.58 实源核对：E_POINTER 在 Win32::Foundation（非 core）；IID 关联常量
 // 需 Interface trait 在作用域内。
-use windows::core::{HRESULT, Interface};
-use windows::Win32::Foundation::{BOOL, E_POINTER, HINSTANCE, HMODULE, HWND};
+use windows::core::{HRESULT, Interface, PCSTR};
+use windows::Win32::Foundation::{BOOL, E_POINTER, FARPROC, HINSTANCE, HMODULE, HWND};
 use windows::Win32::System::LibraryLoader::{DisableThreadLibraryCalls, FreeLibraryAndExitThread};
 use windows::Win32::System::Memory::{MapViewOfFile, OpenFileMappingW, FILE_MAP_READ, FILE_MAP_WRITE};
 use windows::Win32::System::Threading::{GetCurrentProcessId, Sleep};
@@ -49,8 +49,24 @@ const DLL_PROCESS_DETACH: u32 = 0;
 static SELF_MODULE: AtomicUsize = AtomicUsize::new(0);
 /// 共享内存映射视图（init 成功后有效）。
 static SHARED: AtomicPtr<SharedState> = AtomicPtr::new(std::ptr::null_mut());
-/// `SHGetPropertyStoreForWindow` 的原始地址（IAT 槽里补丁前的值）。
+/// `SHGetPropertyStoreForWindow` 的原始地址（导出表解析，见 iat::install）。
 static ORIGINAL_FN: AtomicUsize = AtomicUsize::new(0);
+/// `GetProcAddress` 的原始地址（导出表解析，见 iat::install）。
+static GPA_ORIGINAL: AtomicUsize = AtomicUsize::new(0);
+
+// 自检锚点：本 DLL 自带目标函数的静态导入（仅取址引用，永不调用）。
+// init 扫描自身模块计入 self_slots——非 0 即证明扫描器与 PE 导入表
+// 解析工作正常（任务 36 修复轮 2 的扫描器自检）。`#[link(name=...)]`
+// 显式挂 shell32 导入库——本 DLL 别处不经 windows crate 链接 shell32，
+// 缺此属性则锚点符号链接期未解析。
+#[link(name = "shell32")]
+extern "system" {
+    #[link_name = "SHGetPropertyStoreForWindow"]
+    fn _tbg_self_import_anchor(hwnd: HWND, riid: *const GUID, ppv: *mut *mut c_void) -> HRESULT;
+}
+#[used]
+static _SELF_IMPORT: unsafe extern "system" fn(HWND, *const GUID, *mut *mut c_void) -> HRESULT =
+    _tbg_self_import_anchor;
 
 #[inline]
 fn shared_ref() -> Option<&'static SharedState> {
@@ -83,6 +99,43 @@ unsafe extern "system" fn DllMain(hinst: HINSTANCE, reason: u32, _reserved: *mut
 
 /// `SHGetPropertyStoreForWindow` 的原始签名（文档化原型）。
 type GetStoreFn = unsafe extern "system" fn(HWND, *const GUID, *mut *mut c_void) -> HRESULT;
+/// `GetProcAddress` 的原始签名（文档化原型）。
+type GpaFn = unsafe extern "system" fn(HMODULE, PCSTR) -> FARPROC;
+
+/// `GetProcAddress` 的 IAT 桩（任务 36 修复轮 2 第三层拦截面）：一切
+/// 查询透传原函数；仅当查询名恰为目标函数且原调用可解析时，返回
+/// [`stub_get_store`]——覆盖任务栏运行时动态解析（含 delay-load
+/// helper 经被补丁模块 IAT 的内部解析：helper 把我们的桩写入 delay
+/// 槽，后续调用直达桩）。ordinal 伪指针（<64K）与空指针不做字符串
+/// 比较，直接透传。
+unsafe extern "system" fn stub_get_proc_address(hmod: HMODULE, name: PCSTR) -> FARPROC {
+    let orig = GPA_ORIGINAL.load(Ordering::Acquire);
+    if orig == 0 {
+        return None; // 补丁未就绪（理论不可达：install 先解析再落补丁）
+    }
+    let f: GpaFn = std::mem::transmute(orig);
+    let r = f(hmod, name);
+    let p = name.0 as usize;
+    if p >= 0x1_0000 {
+        // ANSI 名（非 ordinal 伪指针）：与目标名两侧统一小写比较
+        let b = p as *const u8;
+        let mut eq = true;
+        for k in 0..iat::TARGET_FN.len() {
+            if (*b.add(k)).to_ascii_lowercase() != iat::TARGET_FN[k] {
+                eq = false;
+                break;
+            }
+        }
+        if eq && *b.add(iat::TARGET_FN.len()) == 0 && r.is_some() {
+            let stub: GetStoreFn = stub_get_store;
+            return Some(std::mem::transmute::<
+                GetStoreFn,
+                unsafe extern "system" fn() -> isize,
+            >(stub));
+        }
+    }
+    r
+}
 
 /// IAT 重定向目标：调原函数，成功时按策略包装返回的属性存储。
 unsafe extern "system" fn stub_get_store(
@@ -172,16 +225,25 @@ pub unsafe extern "system" fn tbg_hook_init(_param: *mut c_void) -> u32 {
     (*s).stores_wrapped.store(0, Ordering::Relaxed);
     (*s).aumid_served.store(0, Ordering::Relaxed);
 
-    // 2) 扫描 + 重定向（记录原始指针供桩函数调用）。
+    // 2) 扫描 + 重定向（三层拦截面：普通 IAT / delay-load / GetProcAddress；
+    //    原始函数地址由 install 从导出表确定性解析）。
     let stub_ptr: GetStoreFn = stub_get_store;
-    let ok = iat::install(stub_ptr as usize, ORIGINAL_FN.as_ptr(), s);
+    let gpa_ptr: GpaFn = stub_get_proc_address;
+    let ok = iat::install(
+        stub_ptr as usize,
+        gpa_ptr as usize,
+        ORIGINAL_FN.as_ptr(),
+        GPA_ORIGINAL.as_ptr(),
+        s,
+    );
     if !ok {
         (*s).state.store(STATE_ERROR, Ordering::Release);
         return unload_self(INIT_HOOK_FAIL);
     }
-    if (*s).slots_patched == 0 {
-        // 全进程无人静态导入目标函数：拦截面为 0（plan v2 §5 已知限制①，
-        // 状态显式暴露而非静默"成功"）。
+    if (*s).slots_patched == 0 && (*s).gpa_slots == 0 {
+        // 三层拦截面全部为 0：无任何可重定向入口（plan v2 §5 已知限制①，
+        // 状态显式暴露而非静默"成功"；self_slots 此时亦为 0 = 扫描器
+        // 自身异常，一并暴露于诊断面板）。
         (*s).err = tbg_proto::ERR_NO_SLOTS;
         (*s).state.store(STATE_ERROR, Ordering::Release);
         return unload_self(INIT_HOOK_FAIL);

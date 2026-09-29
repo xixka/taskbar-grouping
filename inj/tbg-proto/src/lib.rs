@@ -19,8 +19,9 @@ pub const SECTION_NAME: &str = "Local\\tbg_lite_inject_v1";
 
 /// 协议魔数 "TBG1"。
 pub const MAGIC: u32 = 0x5442_4731;
-/// 协议版本（布局不兼容演进时递增，init 侧拒载旧节）。
-pub const PROTO_VERSION: u32 = 1;
+/// 协议版本（布局不兼容演进时递增，init 侧拒载旧节）。v2（任务 36
+/// 修复轮 2）：新增 delay/gpa/self/names 四个诊断字段。
+pub const PROTO_VERSION: u32 = 2;
 /// 节大小：一个 4 KiB 页（`SharedState` 必须可整装其中）。
 pub const SHARED_SIZE: usize = 4096;
 
@@ -100,8 +101,16 @@ pub struct SharedState {
     pub aumid_served: AtomicU32,
     /// 扫描的模块总数。
     pub modules_scanned: u32,
-    /// 重定向的 IAT 槽总数。
+    /// 重定向的目标函数 IAT 槽总数（普通 + delay-load）。
     pub slots_patched: u32,
+    /// 其中经 delay-load 目录命中的槽数（诊断细分）。
+    pub delay_slots: u32,
+    /// GetProcAddress 重定向槽数（动态解析兜底层）。
+    pub gpa_slots: u32,
+    /// 自检：本 DLL 自身导入表中的目标函数槽数（非 0 = 扫描器工作正常）。
+    pub self_slots: u32,
+    /// 扫描中检视的按名导入总数（PE 解析健康度指标）。
+    pub names_seen: u32,
     /// 补丁明细（前 12 个命中的模块）。
     pub patched: [PatchedModule; 12],
 }
@@ -126,6 +135,10 @@ impl SharedState {
             aumid_served: AtomicU32::new(0),
             modules_scanned: 0,
             slots_patched: 0,
+            delay_slots: 0,
+            gpa_slots: 0,
+            self_slots: 0,
+            names_seen: 0,
             patched: [PatchedModule {
                 name: [0; 24],
                 slots: 0,

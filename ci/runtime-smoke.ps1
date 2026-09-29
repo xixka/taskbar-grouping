@@ -962,6 +962,29 @@ try {
   $a0 = Get-WindowAumid $base[0].Hwnd
   Assert ($a0 -notmatch '~TBG~w') 'inj baseline: real window AUMID is untouched before inject'
 
+  # --- ground truth (task 36 round 2, diagnostics only, no assertion) ---
+  # 无论普通导入 / delay-load / GetProcAddress 动态解析，调用方镜像内
+  # 必然存在该 ANSI 名字符串（导入表 / delay 描述符 / rdata 常量）。
+  # 磁盘字节级搜索给出拦截面真相，与 DLL 扫描器计数交叉验证。
+  try {
+    $probe = 'SHGetPropertyStoreForWindow'
+    $ex = Get-Process -Name explorer -ErrorAction Stop | Select-Object -First 1
+    $mods = @($ex.Modules | Where-Object { $_.ModuleName -match 'taskbar|twinui|shell|xaml|explorer|propsys|windowsui' })
+    Log "inj ground truth: probing $($mods.Count) suspect module files for the ASCII name"
+    foreach ($m in $mods) {
+      try {
+        $raw = [System.IO.File]::ReadAllBytes($m.FileName)
+        $text = [System.Text.Encoding]::GetEncoding(28591).GetString($raw)
+        if ($text.Contains($probe)) {
+          Log "inj ground truth: name FOUND in $($m.ModuleName) ($($raw.Length) bytes)"
+        }
+      } catch { Log "inj ground truth: unreadable $($m.ModuleName): $($_.Exception.Message)" }
+    }
+    Log 'inj ground truth: probe done (unlisted suspect modules do not carry the name)'
+  } catch {
+    Log "inj ground truth probe failed (non-fatal): $($_.Exception.Message)"
+  }
+
   # --- inject (line-1 equivalent: ungroup) ---
   $inj1 = & $exeInj inject | Out-String
   Assert (($LASTEXITCODE -eq 0) -and ($inj1 -cmatch 'inject: ok')) 'inj: inject exits 0 with "inject: ok"'
@@ -969,9 +992,15 @@ try {
   $st1flat = $st1 -replace "`r|`n", ' '
   Log "inj status after inject: $st1flat"
   Assert ($st1 -cmatch 'state\s*:\s*active') 'inj: status active after inject'
-  $patchedOk = $false
-  if ($st1 -match 'patched=(\d+)') { $patchedOk = ([int]$Matches[1] -ge 1) }
-  Assert $patchedOk "inj: IAT slots patched >= 1 (taskbar imports the target through a static IAT)"
+  # 拦截面断言（三层任一命中即可：普通 IAT / delay-load / GetProcAddress）
+  $slotOk = $false
+  if ($st1 -match 'patched=(\d+)') { $slotOk = ([int]$Matches[1] -ge 1) }
+  if (-not $slotOk -and $st1 -match 'gpa=(\d+)') { $slotOk = ([int]$Matches[1] -ge 1) }
+  Assert $slotOk 'inj: interception slots >= 1 (static IAT / delay-load / GetProcAddress redirect)'
+  # 扫描器自检：本 DLL 自带目标导入锚点，self >= 1 证明扫描器工作正常
+  $selfOk = $false
+  if ($st1 -match 'self=(\d+)') { $selfOk = ([int]$Matches[1] -ge 1) }
+  Assert $selfOk 'inj: scanner self-check >= 1 (the DLL carries its own import anchor)'
 
   # windows created AFTER the injection must be ungrouped
   Clear-TestWindows
@@ -1011,11 +1040,14 @@ try {
   Assert ($np2 -eq 1) "inj: post-stop notepads group natively again (got $np2)"
 
   # --- explorer restart: hook dies with the shell, re-inject works ---
+  # 语义（任务 36 修复轮 2 修正）：共享节由映射视图保活——旧 explorer
+  # （含 DLL）消亡且宿主进程退出后，节亦消亡；重启后的 status 是全新
+  # 节的 detached 态（plan v2 §5-④：不做自动重注入，手动再 inject）。
   $newPid = Restart-ExplorerShell
   Assert ($newPid -ne 0) 'inj: explorer restarted with a new pid'
   Start-Sleep -Seconds 3
   $st4 = & $exeInj status | Out-String
-  Assert ($st4 -cmatch 'stale') 'inj: status flags the stale state after explorer restart'
+  Assert ($st4 -cmatch 'state\s*:\s*detached') 'inj: after explorer restart status is detached (hook died with the old shell, section lifetime tied to views)'
   $inj2 = & $exeInj inject | Out-String
   Assert (($LASTEXITCODE -eq 0) -and ($inj2 -cmatch 'inject: ok')) 'inj: re-inject into the new explorer succeeds'
   $sp2 = & $exeInj stop | Out-String
