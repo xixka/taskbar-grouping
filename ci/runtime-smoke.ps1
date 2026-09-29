@@ -966,6 +966,8 @@ try {
   $inj1 = & $exeInj inject | Out-String
   Assert (($LASTEXITCODE -eq 0) -and ($inj1 -cmatch 'inject: ok')) 'inj: inject exits 0 with "inject: ok"'
   $st1 = & $exeInj status | Out-String
+  $st1flat = $st1 -replace "`r|`n", ' '
+  Log "inj status after inject: $st1flat"
   Assert ($st1 -cmatch 'state\s*:\s*active') 'inj: status active after inject'
   $patchedOk = $false
   if ($st1 -match 'patched=(\d+)') { $patchedOk = ([int]$Matches[1] -ge 1) }
@@ -980,6 +982,8 @@ try {
   $np1 = @($btns1 | Where-Object { $_ -like '*Notepad*' }).Count
   Assert ($np1 -eq 2) "inj: post-inject notepads get TWO separate taskbar buttons (got $np1)"
   $st2 = & $exeInj status | Out-String
+  $st2flat = $st2 -replace "`r|`n", ' '
+  Log "inj status while active: $st2flat"
   $callsOk = $false
   if ($st2 -match 'calls=(\d+)') { $callsOk = ([int]$Matches[1] -ge 1) }
   Assert $callsOk 'inj: interception counter calls >= 1 (taskbar queried through the hook)'

@@ -177,18 +177,27 @@ pub unsafe extern "system" fn tbg_hook_init(_param: *mut c_void) -> u32 {
     let ok = iat::install(stub_ptr as usize, ORIGINAL_FN.as_ptr(), s);
     if !ok {
         (*s).state.store(STATE_ERROR, Ordering::Release);
-        return INIT_HOOK_FAIL;
+        return unload_self(INIT_HOOK_FAIL);
     }
     if (*s).slots_patched == 0 {
         // 全进程无人静态导入目标函数：拦截面为 0（plan v2 §5 已知限制①，
         // 状态显式暴露而非静默"成功"）。
         (*s).err = tbg_proto::ERR_NO_SLOTS;
         (*s).state.store(STATE_ERROR, Ordering::Release);
-        return INIT_HOOK_FAIL;
+        return unload_self(INIT_HOOK_FAIL);
     }
 
     (*s).state.store(STATE_ACTIVE, Ordering::Release);
     INIT_OK
+}
+
+/// init 失败路径的自清理：补丁未生效（无在途调用），直接摘除自身，
+/// 以 `code` 作为远程线程退出码结束——宿主 GetExitCodeThread 取回同值，
+/// explorer 内不残留失效 DLL。状态先写 ERROR 再卸载：宿主自己的视图
+/// 保节存活，诊断面板仍可读到失败细节。
+unsafe fn unload_self(code: u32) -> u32 {
+    let hmod = HMODULE(SELF_MODULE.load(Ordering::Relaxed) as *mut c_void);
+    FreeLibraryAndExitThread(hmod, code)
 }
 
 /// 宿主远程线程入口：摘钩 + 卸载（本函数不返回）。

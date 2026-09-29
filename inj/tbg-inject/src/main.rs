@@ -162,6 +162,7 @@ pub(crate) fn do_inject(group: Option<&str>) -> Result<String, String> {
             ));
         }
         let view = sharedmem::SharedView::ensure()?;
+        let section_existed = view.existed;
         let s = view.as_mut();
 
         let state = s.state.load(std::sync::atomic::Ordering::Acquire);
@@ -188,8 +189,16 @@ pub(crate) fn do_inject(group: Option<&str>) -> Result<String, String> {
 
         let code = injector::call_remote_export(pid, &dll, b"tbg_hook_init\0")?;
         if code != INIT_OK && code != INIT_ALREADY {
+            // 诊断面板（任务 36 修复：一次运行拿到全部判据，无需二次 status）
             return Err(format!(
-                "inject: hook init failed (code {code}) — see `tbg-inject status`"
+                "inject: hook init failed (code {code}) — state={} err={} gen={} scanned={} patched={} section={} dll={}",
+                s.state_name(),
+                s.err,
+                s.generation.load(std::sync::atomic::Ordering::Relaxed),
+                s.modules_scanned,
+                s.slots_patched,
+                if section_existed { "pre-existing" } else { "fresh" },
+                dll.display(),
             ));
         }
         let st = s.state.load(std::sync::atomic::Ordering::Acquire);
@@ -345,6 +354,12 @@ fn patched_names(s: &SharedState) -> String {
 pub(crate) fn fmt_status(s: &SharedState, pid: Option<u32>) -> String {
     let mut out = String::new();
     out.push_str("edition : tbg-inject (route A, in-process hook)\n");
+    out.push_str(&format!(
+        "section: state={} self_module={:#x} size={}\n",
+        if s.magic == tbg_proto::MAGIC { "valid" } else { "invalid" },
+        s.self_module,
+        s.size,
+    ));
     out.push_str(&format!("explorer: {}\n", fmt_pid(pid)));
     let state = s.state.load(std::sync::atomic::Ordering::Acquire);
     let gen = s.generation.load(std::sync::atomic::Ordering::Relaxed);

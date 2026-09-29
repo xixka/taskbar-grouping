@@ -1,13 +1,18 @@
 //! IAT 重定向（任务 34，docs/plan.md v2 §5 清室架构核心）。
 //!
 //! 枚举本进程（explorer）已加载模块，解析每个模块的 PE 导入表，把
-//! **静态导入** `shell32.dll!SHGetPropertyStoreForWindow` 的 IAT 槽位
+//! **静态导入** `SHGetPropertyStoreForWindow` 的 IAT 槽位
 //! （`IMAGE_IMPORT_DESCRIPTOR.FirstThunk` 数组元素）替换为我们的桩函数
 //! 地址；原值保存供透传调用与摘钩恢复。
 //!
+//! **按函数名匹配、不按 DLL 名**（任务 36 修复）：Win11 系统模块经
+//! API Set 别名（`api-ms-win-shell-shell32-*.dll`）导入同一函数，
+//! DLL 名前缀过滤会漏掉全部真实槽位（Phase INJ 首跑 slots=0 实锤）。
+//! 函数名全进程唯一（仅 shell32 导出），语义不变。
+//!
 //! 为什么是 IAT 而不是 inline hook：不改任何代码字节，只改数据指针
 //! （x64 对齐 8 字节写原子），无指令长度反汇编需求，无私有符号依赖；
-//! 导入名（`SHGetPropertyStoreForWindow` / `SHELL32.dll`）是稳定 ABI。
+//! 导入名 `SHGetPropertyStoreForWindow` 是稳定 ABI。
 //!
 //! 已知边界（plan v2 §5 已知限制①）：delay-load 导入、运行时
 //! `GetProcAddress` 自解析、无 OriginalFirstThunk（INT 缺失）的模块
@@ -91,10 +96,9 @@ const IMAGE_ORDINAL_FLAG64: u64 = 0x8000_0000_0000_0000;
 /// (槽位地址, 原始值)。LIFO 恢复。
 static SLOTS: Mutex<Vec<(usize, u64)>> = Mutex::new(Vec::new());
 
-/// 目标导入名（winuser 文档化导出，全 ABI 稳定）。
+/// 目标导入名（winuser 文档化导出，全 ABI 稳定）。按函数名匹配、
+/// 不按 DLL 名（任务 36 修复：API Set 别名导入会绕过 "shell32" 前缀）。
 const TARGET_FN: &[u8] = b"SHGetPropertyStoreForWindow";
-/// 目标 DLL 名前缀（大小写不敏感匹配 "SHELL32.dll" 等）。
-const TARGET_DLL: &[u8] = b"shell32";
 
 /// 安装：扫描全部模块并重定向。返回 false 仅当模块快照失败。
 ///
@@ -206,35 +210,36 @@ unsafe fn scan_module(base: usize, hook_addr: usize) -> (u32, usize) {
             break; // 目录表结束哨兵
         }
         // INT 缺失（纯绑定导入）时名称不可靠，跳过（模块注释"已知边界"）。
-        if d.original_first_thunk != 0 && d.name_rva != 0 && (d.name_rva as usize) < size_of_image {
-            if dll_name_matches(base, d.name_rva as usize) {
-                let int_base = (base + d.original_first_thunk as usize) as *const u64;
-                let mut i = 0usize;
-                loop {
-                    let thunk = ptr::read_volatile(int_base.add(i));
-                    if thunk == 0 {
-                        break;
-                    }
-                    if thunk & IMAGE_ORDINAL_FLAG64 == 0 {
-                        let name_rva = thunk as usize;
-                        if name_rva < size_of_image
-                            && import_name_matches(base, name_rva)
-                        {
-                            let slot = (base + d.first_thunk_rva as usize + i * 8) as *mut u64;
-                            let current = ptr::read_volatile(slot) as usize;
-                            if current != 0 && current != hook_addr {
-                                if patch_slot(slot, hook_addr) {
-                                    if first_original == 0 {
-                                        first_original = current;
-                                    }
-                                    record_slot(slot as usize, current as u64);
-                                    hits += 1;
+        // 任务 36 修复：不再按 DLL 名（"shell32"）过滤——Win11 系统模块经
+        // API Set 名（api-ms-win-shell-shell32-*.dll）导入同一函数，前缀
+        // 匹配会漏掉全部真实槽位（Phase INJ 首跑 code 4 / slots=0 实锤）。
+        // 改为对每个描述符按函数名扫描；IAT 槽的当前值是加载器解析后的
+        // 真实函数地址（仅 shell32 导出该名），重定向语义不变。
+        if d.original_first_thunk != 0 && d.first_thunk_rva != 0 {
+            let int_base = (base + d.original_first_thunk as usize) as *const u64;
+            let mut i = 0usize;
+            loop {
+                let thunk = ptr::read_volatile(int_base.add(i));
+                if thunk == 0 {
+                    break;
+                }
+                if thunk & IMAGE_ORDINAL_FLAG64 == 0 {
+                    let name_rva = thunk as usize;
+                    if name_rva < size_of_image && import_name_matches(base, name_rva) {
+                        let slot = (base + d.first_thunk_rva as usize + i * 8) as *mut u64;
+                        let current = ptr::read_volatile(slot) as usize;
+                        if current != 0 && current != hook_addr {
+                            if patch_slot(slot, hook_addr) {
+                                if first_original == 0 {
+                                    first_original = current;
                                 }
+                                record_slot(slot as usize, current as u64);
+                                hits += 1;
                             }
                         }
                     }
-                    i += 1;
                 }
+                i += 1;
             }
         }
         desc = desc.add(1);
@@ -244,25 +249,6 @@ unsafe fn scan_module(base: usize, hook_addr: usize) -> (u32, usize) {
         }
     }
     (hits, first_original)
-}
-
-/// 读 DLL 名（C 字符串，截断 32 字节），与 `SHELL32` 前缀不区分大小写匹配。
-unsafe fn dll_name_matches(base: usize, name_rva: usize) -> bool {
-    let p = (base + name_rva) as *const u8;
-    for k in 0..32 {
-        let c = *p.add(k);
-        if c == 0 {
-            // 名串结束：仅当目标前缀已全部匹配才命中（如 "SHELL32"）
-            return k >= TARGET_DLL.len();
-        }
-        if k >= TARGET_DLL.len() {
-            return true; // 前缀已全匹配（如 "SHELL32.dll"）
-        }
-        if c.to_ascii_lowercase() != TARGET_DLL[k] {
-            return false;
-        }
-    }
-    true
 }
 
 /// 读 IMAGE_IMPORT_BY_NAME 的名称（跳过 2 字节 Hint），与目标导出名
@@ -375,7 +361,6 @@ mod tests {
     #[test]
     fn target_constants() {
         assert_eq!(TARGET_FN, b"SHGetPropertyStoreForWindow");
-        assert_eq!(TARGET_DLL, b"shell32");
         assert_eq!(IMAGE_ORDINAL_FLAG64, 0x8000_0000_0000_0000);
     }
 }
