@@ -29,7 +29,10 @@ use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 // 需 Interface trait 在作用域内。
 use windows::core::{HRESULT, Interface, PCSTR};
 use windows::Win32::Foundation::{BOOL, E_POINTER, FARPROC, HINSTANCE, HMODULE, HWND};
-use windows::Win32::System::LibraryLoader::{DisableThreadLibraryCalls, FreeLibraryAndExitThread};
+use windows::Win32::System::LibraryLoader::{
+    DisableThreadLibraryCalls, FreeLibrary, FreeLibraryAndExitThread, GetModuleFileNameW,
+    LoadLibraryW,
+};
 use windows::Win32::System::Memory::{MapViewOfFile, OpenFileMappingW, FILE_MAP_READ, FILE_MAP_WRITE};
 use windows::Win32::System::Threading::{GetCurrentProcessId, Sleep};
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
@@ -250,6 +253,20 @@ pub unsafe extern "system" fn tbg_hook_init(_param: *mut c_void) -> u32 {
     }
 
     (*s).state.store(STATE_ACTIVE, Ordering::Release);
+
+    // 自钉扎（任务 36 修复轮 4）：实测宿主进程退出后本 DLL 会从 explorer
+    // 中消失（机制待诊断：远程 LoadLibraryW 的进程级引用计数理论上应
+    // 保持常驻——run 36525398321：ACTIVE + patched=5 + explorer pid 未变，
+    // 下一次宿主却看到全新节）。对自身再 LoadLibraryW 一次（+1 引用）：
+    // 未知路径的单次递减不再致命；stop 走两段释放仍可干净卸载。
+    // 诊断证据（inject 后模块表×2 + 事件日志）见 Phase INJ 插桩。
+    let hmod = HMODULE(SELF_MODULE.load(Ordering::Relaxed) as *mut c_void);
+    let mut path_buf = [0u16; 512];
+    let n = GetModuleFileNameW(hmod, &mut path_buf);
+    if n > 0 && (n as usize) < path_buf.len() {
+        let _ = LoadLibraryW(windows::core::PCWSTR::from_raw(path_buf.as_ptr()));
+    }
+
     INIT_OK
 }
 
@@ -281,6 +298,9 @@ pub unsafe extern "system" fn tbg_hook_stop(_param: *mut c_void) -> u32 {
     // plan v2 §5 已知限制②；业界同类工具多以常驻规避，本版选择完整卸载）。
     Sleep(1500);
     let hmod = HMODULE(SELF_MODULE.load(Ordering::Relaxed) as *mut c_void);
+    // 两段释放：先撤 init 的自钉扎（+1），再撤远程 LoadLibraryW 的装载
+    // 引用（+1）并随线程退出——引用计数归零，DLL 干净卸载。
+    let _ = FreeLibrary(hmod);
     FreeLibraryAndExitThread(hmod, STOP_OK);
     // FreeLibraryAndExitThread 不返回；显式收尾值仅为满足返回类型。
     STOP_OK

@@ -986,14 +986,20 @@ try {
   }
 
   # --- inject (line-1 equivalent: ungroup) ---
-  # task 36 round 3 diagnostics (ascii only): the inject output carries the
-  # live slot counters (scanned/patched/delay/gpa/self/names + generation);
-  # the pid pair across the call reveals an explorer crash-restart.
+  # task 36 round 4 diagnostics (ascii only): module-list checks right after
+  # inject and again 3s later + event log scan at the end of the phase.
+  # The inject output carries the live counters; pid tracking reveals a
+  # crash-restart; the module count reveals an unexpected unload.
   $expB = (Get-Process -Name explorer -ErrorAction SilentlyContinue | Select-Object -First 1).Id
   $inj1 = & $exeInj inject | Out-String
   Log "inj inject output >>> $inj1"
-  $expA = (Get-Process -Name explorer -ErrorAction SilentlyContinue | Select-Object -First 1).Id
-  Log "inj: explorer pid before=$expB after=$expA"
+  $ex1 = Get-Process -Name explorer -ErrorAction SilentlyContinue | Select-Object -First 1
+  $hook1 = @($ex1.Modules | Where-Object { $_.ModuleName -eq 'tbg_hook.dll' })
+  Log ("inj: right after inject pid={0} (was {1}) tbg_hook.dll modules={2}" -f $ex1.Id, $expB, $hook1.Count)
+  Start-Sleep -Seconds 3
+  $ex2 = Get-Process -Name explorer -ErrorAction SilentlyContinue | Select-Object -First 1
+  $hook2 = @($ex2.Modules | Where-Object { $_.ModuleName -eq 'tbg_hook.dll' })
+  Log ("inj: 3s later pid={0} tbg_hook.dll modules={1}" -f $ex2.Id, $hook2.Count)
   Assert (($LASTEXITCODE -eq 0) -and ($inj1 -cmatch 'inject: ok')) 'inj: inject exits 0 with "inject: ok"'
   $st1 = & $exeInj status | Out-String
   $st1flat = $st1 -replace "`r|`n", ' '
@@ -1060,6 +1066,20 @@ try {
   Assert (($LASTEXITCODE -eq 0) -and ($inj2 -cmatch 'inject: ok')) 'inj: re-inject into the new explorer succeeds'
   $sp2 = & $exeInj stop | Out-String
   Assert (($LASTEXITCODE -eq 0) -and ($sp2 -cmatch 'stop: ok')) 'inj: stop after re-inject exits 0'
+
+  # --- event log evidence (task 36 round 4, diagnostics only) ---
+  # Event 1000 = application crash with the faulting module name; this tells
+  # an explorer crash from a silent unload and names the responsible module.
+  try {
+    $evts = Get-WinEvent -FilterHashtable @{ LogName = 'Application'; Id = 1000; StartTime = (Get-Date).AddMinutes(-15) } -MaxEvents 8 -ErrorAction SilentlyContinue
+    if ($evts) {
+      foreach ($e in $evts) {
+        $m = if ($e.Message) { ($e.Message -replace "`r|`n", ' ') } else { '(no message)' }
+        if ($m.Length -gt 200) { $m = $m.Substring(0, 200) }
+        Log "inj event1000: $($m)"
+      }
+    } else { Log 'inj eventlog: no application crash events in the last 15 minutes' }
+  } catch { Log "inj eventlog probe failed (non-fatal): $($_.Exception.Message)" }
 } catch {
   Fail "phase INJ crashed: $($_.Exception.Message)"
   Log $_.ScriptStackTrace
