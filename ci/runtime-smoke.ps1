@@ -48,6 +48,16 @@
 #             log evidence, hooks alive for new windows), and the circuit
 #             breaker (3 forced abnormal exits -> 4th start uninstalls the
 #             autostart entry; 5th start must not trip again).
+#   Phase INJ - task 36 injection edition end-to-end (plan v2 SS5): the
+#             tbg-inject.exe + tbg_hook.dll pair drives the full lifecycle
+#             (build / version / usage exit codes / menu), then proves the
+#             in-process interception: baseline 2 notepads share ONE taskbar
+#             button -> after inject the (fresh) notepads get TWO separate
+#             buttons while the REAL window AUMID stays untouched (route A
+#             never writes properties) -> interception counters (calls /
+#             aumid-served) > 0 -> stop detaches -> native grouping returns
+#             -> explorer restart leaves a flagged stale state and a clean
+#             re-inject works.
 #   Phase C - explorer/taskbar feasibility probe (best effort, no
 #             assertions): screenshots only, to see whether a real taskbar
 #             can be hosted in this session.
@@ -123,7 +133,7 @@ function Clear-TestWindows {
   Get-Process -Name 'tbg-lite' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
 }
 
-function Start-Watch([string[]]$watchArgs, [string]$logName, [string[]]$StdinLines) {
+function Start-Watch([string[]]$watchArgs, [string]$logName, [string[]]$StdinLines, [string]$ExePath = $exe) {
   $logPath = Join-Path $out $logName
   $errPath = Join-Path $out ($logName -replace '\.log$', '.err.log')
   # Round 4: Start-Process -PassThru proved unreliable on the runner - the
@@ -142,7 +152,7 @@ function Start-Watch([string[]]$watchArgs, [string]$logName, [string[]]$StdinLin
     if ($_ -match '[\s"]') { '"' + ($_ -replace '"', '\"') + '"' } else { $_ }
   }
   $psi = New-Object System.Diagnostics.ProcessStartInfo
-  $psi.FileName               = $exe
+  $psi.FileName               = $ExePath
   $psi.Arguments              = ($quoted -join ' ')
   $psi.UseShellExecute        = $false
   $psi.RedirectStandardOutput = $true
@@ -906,6 +916,119 @@ try {
   Remove-ItemProperty -Path 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run' -Name 'tbg-lite' -ErrorAction SilentlyContinue
   if (-not (Get-Process -Name explorer -ErrorAction SilentlyContinue)) {
     Start-Process -FilePath 'explorer.exe'
+  }
+  Clear-TestWindows
+}
+
+# -------- phase INJ: injection edition end-to-end (task 36, plan v2 SS5) -------
+try {
+  Log '=== Phase INJ: injection edition (route A) ==='
+  $exeInj = Join-Path $root '..\target\release\tbg-inject.exe'
+  $dllInj = Join-Path $root '..\target\release\tbg_hook.dll'
+
+  # --- framework tier: artifacts, version, usage codes, menu ---
+  Assert (Test-Path $exeInj) 'inj: tbg-inject.exe built (workspace member)'
+  Assert (Test-Path $dllInj) 'inj: tbg_hook.dll built (cdylib artifact)'
+  $verInj = & $exeInj --version | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($verInj -cmatch 'tbg-inject 0\.1\.0')) 'inj: --version exits 0 with "tbg-inject 0.1.0"'
+  $st0 = & $exeInj status | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($st0 -cmatch 'state\s*:\s*detached')) 'inj: baseline status is detached'
+  # 用法错误断言走 Phase I 同款 Start-Watch 模式（& 调用 + stderr 重定向在
+  # PS 5.1 EAP=Stop 下有 NativeCommandError 风险；stderr 落 .err.log 文件）
+  $u1 = Start-Watch @('inject','--strategy','group') 'inj-usage1.log' $null $exeInj
+  $null = $u1.WaitForExit(30000)
+  $u1.WaitForExit()
+  Flush-WatchLogs $u1
+  Assert ($u1.ExitCode -eq 2) "inj usage: inject --strategy group without --group exits 2 (got: $($u1.ExitCode))"
+  $u1Err = Get-Content (Join-Path $out 'inj-usage1.err.log') -Raw
+  Assert ($u1Err -cmatch 'usage:') 'inj usage: stderr carries the usage message'
+  $u2 = Start-Watch @('bogus-command') 'inj-usage2.log' $null $exeInj
+  $null = $u2.WaitForExit(30000)
+  $u2.WaitForExit()
+  Flush-WatchLogs $u2
+  Assert ($u2.ExitCode -eq 2) "inj usage: unknown command exits 2 (got: $($u2.ExitCode))"
+  # 任务 36：注入版菜单会话——第 4 参显式指定 tbg-inject.exe（默认仍是 $exe）
+  $m1 = Start-Watch @() 'inj-menu.log' @('0') $exeInj
+  Wait-Watch $m1 60
+  $m1Log = Get-Content (Join-Path $out 'inj-menu.log') -Raw
+  Assert (($m1.ExitCode -eq 0) -and ($m1Log -cmatch 'interactive menu')) 'inj menu: no-args launch shows interactive menu and exits 0 via [0]'
+
+  # --- behavioral tier: baseline native grouping ---
+  $base = Spawn-Notepads 2
+  Start-Sleep -Seconds 3
+  $btns0 = Get-TaskbarButtonNames
+  $np0 = @($btns0 | Where-Object { $_ -like '*Notepad*' }).Count
+  Assert ($np0 -eq 1) "inj baseline: 2 notepads share ONE taskbar button (got $np0)"
+  $a0 = Get-WindowAumid $base[0].Hwnd
+  Assert ($a0 -notmatch '~TBG~w') 'inj baseline: real window AUMID is untouched before inject'
+
+  # --- inject (line-1 equivalent: ungroup) ---
+  $inj1 = & $exeInj inject | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($inj1 -cmatch 'inject: ok')) 'inj: inject exits 0 with "inject: ok"'
+  $st1 = & $exeInj status | Out-String
+  Assert ($st1 -cmatch 'state\s*:\s*active') 'inj: status active after inject'
+  $patchedOk = $false
+  if ($st1 -match 'patched=(\d+)') { $patchedOk = ([int]$Matches[1] -ge 1) }
+  Assert $patchedOk "inj: IAT slots patched >= 1 (taskbar imports the target through a static IAT)"
+
+  # windows created AFTER the injection must be ungrouped
+  Clear-TestWindows
+  Start-Sleep -Seconds 2
+  $live = Spawn-Notepads 2
+  Start-Sleep -Seconds 3
+  $btns1 = Get-TaskbarButtonNames
+  $np1 = @($btns1 | Where-Object { $_ -like '*Notepad*' }).Count
+  Assert ($np1 -eq 2) "inj: post-inject notepads get TWO separate taskbar buttons (got $np1)"
+  $st2 = & $exeInj status | Out-String
+  $callsOk = $false
+  if ($st2 -match 'calls=(\d+)') { $callsOk = ([int]$Matches[1] -ge 1) }
+  Assert $callsOk 'inj: interception counter calls >= 1 (taskbar queried through the hook)'
+  $servedOk = $false
+  if ($st2 -match 'aumid-served=(\d+)') { $servedOk = ([int]$Matches[1] -ge 1) }
+  Assert $servedOk 'inj: aumid-served >= 1 (PKEY_AppUserModel_ID reads rewritten in-process)'
+  $a1 = Get-WindowAumid $live[0].Hwnd
+  Assert ($a1 -notmatch '~TBG~w') 'inj: real window AUMID still untouched while injected (read-path rewrite only)'
+  Shot 'inj-ungrouped-taskbar.png'
+
+  # --- stop: unhook + unload + counters ---
+  $sp1 = & $exeInj stop | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($sp1 -cmatch 'stop: ok')) 'inj: stop exits 0 with "stop: ok"'
+  $st3 = & $exeInj status | Out-String
+  Assert ($st3 -cmatch 'state\s*:\s*detached') 'inj: state detached after stop'
+  Assert ($sp1 -match 'calls=\d+') 'inj: stop reports the final traffic counters'
+
+  # --- native grouping returns for NEW windows after unhook ---
+  Clear-TestWindows
+  Start-Sleep -Seconds 2
+  $post = Spawn-Notepads 2
+  Start-Sleep -Seconds 3
+  $btns2 = Get-TaskbarButtonNames
+  $np2 = @($btns2 | Where-Object { $_ -like '*Notepad*' }).Count
+  Assert ($np2 -eq 1) "inj: post-stop notepads group natively again (got $np2)"
+
+  # --- explorer restart: hook dies with the shell, re-inject works ---
+  $newPid = Restart-ExplorerShell
+  Assert ($newPid -ne 0) 'inj: explorer restarted with a new pid'
+  Start-Sleep -Seconds 3
+  $st4 = & $exeInj status | Out-String
+  Assert ($st4 -cmatch 'stale') 'inj: status flags the stale state after explorer restart'
+  $inj2 = & $exeInj inject | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($inj2 -cmatch 'inject: ok')) 'inj: re-inject into the new explorer succeeds'
+  $sp2 = & $exeInj stop | Out-String
+  Assert (($LASTEXITCODE -eq 0) -and ($sp2 -cmatch 'stop: ok')) 'inj: stop after re-inject exits 0'
+} catch {
+  Fail "phase INJ crashed: $($_.Exception.Message)"
+  Log $_.ScriptStackTrace
+} finally {
+  # hygiene: unhook if anything is still injected, never leave test windows。
+  # 同样避免原生 stderr 重定向（PS 5.1 EAP=Stop 陷阱）——走 Start-Watch，
+  # 退出码忽略（清理尽力而为）
+  $exeInj = Join-Path $root '..\target\release\tbg-inject.exe'
+  if (Test-Path $exeInj) {
+    $hyg = Start-Watch @('stop') 'inj-hygiene-stop.log' $null $exeInj
+    $null = $hyg.WaitForExit(30000)
+    $hyg.WaitForExit()
+    Flush-WatchLogs $hyg
   }
   Clear-TestWindows
 }
