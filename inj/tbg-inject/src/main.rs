@@ -280,7 +280,7 @@ fn cmd_status() -> i32 {
         let pid = injector::explorer_pid();
         let view = sharedmem::SharedView::ensure().map_err(|e| e).ok();
         let out = match view {
-            Some(v) => fmt_status(v.as_ref(), pid),
+            Some(v) => fmt_status(v.as_ref(), pid, v.existed),
             None => format!(
                 "edition : tbg-inject (route A, in-process hook)\nexplorer: {}\nstate   : detached (no shared section)\n",
                 fmt_pid(pid)
