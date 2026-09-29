@@ -20,11 +20,12 @@ use std::ffi::c_void;
 use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use windows::core::{BSTR, E_NOINTERFACE, E_POINTER, HRESULT, IUnknown, PROPVARIANT, S_OK};
-use windows::Win32::Foundation::HWND;
+// windows 0.58 实源核对：E_*/S_OK 错误码在 Win32::Foundation（非 core），
+// PROPERTYKEY 在 PropertiesSystem。
+use windows::core::{BSTR, GUID, HRESULT, IUnknown, PROPVARIANT};
+use windows::Win32::Foundation::{E_NOINTERFACE, E_POINTER, S_OK, HWND};
 use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
-use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
-use windows::core::{GUID, PROPERTYKEY};
+use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY};
 
 use tbg_proto::{SharedState, STATE_ACTIVE};
 
@@ -78,7 +79,7 @@ struct InnerVtbl {
     set_value:
         unsafe extern "system" fn(*mut c_void, *const PROPERTYKEY, *const PROPVARIANT) -> HRESULT,
     commit: unsafe extern "system" fn(*mut c_void) -> HRESULT,
-    /// IPropertyStore 之后的方法槽不透传（见 QI 策略），不声明。
+    // IPropertyStore 之后的方法槽不透传（见 QI 策略），不声明。
 }
 
 static PROXY_VTBL: ProxyVtbl = ProxyVtbl {

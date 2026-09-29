@@ -11,16 +11,16 @@ use std::ffi::c_void;
 use std::path::Path;
 
 use windows::core::{s, w, PCSTR, PCWSTR};
-use windows::Win32::Foundation::CloseHandle;
+// 0.58 实源核对：FreeLibrary 在 Foundation；WriteProcessMemory 在
+// System::Diagnostics::Debug（非 Memory）。
+use windows::Win32::Foundation::{CloseHandle, FreeLibrary};
+use windows::Win32::System::Diagnostics::Debug::WriteProcessMemory;
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Module32FirstW, Module32NextW, MODULEENTRY32W, TH32CS_SNAPMODULE,
 };
-use windows::Win32::System::LibraryLoader::{
-    FreeLibrary, GetModuleHandleW, GetProcAddress, LoadLibraryW,
-};
+use windows::Win32::System::LibraryLoader::{GetModuleHandleW, GetProcAddress, LoadLibraryW};
 use windows::Win32::System::Memory::{
-    VirtualAllocEx, VirtualFreeEx, WriteProcessMemory, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE,
-    PAGE_READWRITE,
+    VirtualAllocEx, VirtualFreeEx, MEM_COMMIT, MEM_RELEASE, MEM_RESERVE, PAGE_READWRITE,
 };
 use windows::Win32::System::Threading::{
     GetExitCodeThread, OpenProcess, WaitForSingleObject, CreateRemoteThread, LPTHREAD_START_ROUTINE,

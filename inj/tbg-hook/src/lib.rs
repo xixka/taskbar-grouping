@@ -25,8 +25,9 @@ mod wrap;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
-use windows::core::{E_POINTER, HRESULT};
-use windows::Win32::Foundation::{BOOL, HINSTANCE, HMODULE, HWND};
+// 0.58 实源核对：E_POINTER 在 Win32::Foundation（非 core）。
+use windows::core::HRESULT;
+use windows::Win32::Foundation::{BOOL, E_POINTER, HINSTANCE, HMODULE, HWND};
 use windows::Win32::System::LibraryLoader::{DisableThreadLibraryCalls, FreeLibraryAndExitThread};
 use windows::Win32::System::Memory::{MapViewOfFile, OpenFileMappingW, FILE_MAP_READ, FILE_MAP_WRITE};
 use windows::Win32::System::Threading::{GetCurrentProcessId, Sleep};

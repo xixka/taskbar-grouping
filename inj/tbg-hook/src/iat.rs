@@ -187,12 +187,12 @@ unsafe fn scan_module(base: usize, hook_addr: usize) -> (u32, usize) {
     if magic != IMAGE_OPTIONAL_MAGIC_PE32PLUS {
         return (0, 0); // 仅支持 x64 PE32+（与目标平台一致）
     }
-    let size_of_image = ptr::read_unaligned(opt.add(SIZE_OF_IMAGE_OFFSET) as *const u32) as usize;
+    let size_of_image = ptr::read_unaligned((opt + SIZE_OF_IMAGE_OFFSET) as *const u32) as usize;
     if size_of_image == 0 {
         return (0, 0);
     }
     let imp_rva =
-        ptr::read_unaligned(opt.add(IMPORT_DIRECTORY_OFFSET) as *const u32) as usize;
+        ptr::read_unaligned((opt + IMPORT_DIRECTORY_OFFSET) as *const u32) as usize;
     if imp_rva == 0 || imp_rva >= size_of_image {
         return (0, 0);
     }

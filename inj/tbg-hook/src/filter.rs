@@ -17,7 +17,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WS_EX_TOOLWINDOW,
 };
 
-use tbg_proto::{SharedState, MODE_GROUP, MODE_UNGROUP};
+use tbg_proto::{SharedState, MODE_GROUP};
 
 /// 与主包 appid.rs 同值的标记与上限（对齐决策见模块注释）。
 pub(crate) const SUFFIX_MARKER: &str = "~TBG~w";
