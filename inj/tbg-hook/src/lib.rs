@@ -138,17 +138,18 @@ pub unsafe extern "system" fn tbg_hook_init(_param: *mut c_void) -> u32 {
         .chain(std::iter::once(0))
         .collect();
     let name = windows::core::PCWSTR::from_raw(name_w.as_ptr());
-    let h = match OpenFileMappingW(FILE_MAP_READ | FILE_MAP_WRITE, false, name) {
+    // OpenFileMappingW 0.58 签名：第一参数是裸 u32（非 FILE_MAP 旗标）
+    let h = match OpenFileMappingW(FILE_MAP_READ.0 | FILE_MAP_WRITE.0, false, name) {
         Ok(h) => h,
         Err(_) => return INIT_NO_SECTION,
     };
-    let base = match MapViewOfFile(h, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, 0) {
-        Ok(p) => p as *mut SharedState,
-        Err(_) => {
-            let _ = windows::Win32::Foundation::CloseHandle(h);
-            return INIT_NO_SECTION;
-        }
-    };
+    // 0.58 签名：MapViewOfFile 返回 MEMORY_MAPPED_VIEW_ADDRESS（失败 .Value 为 null）
+    let view = MapViewOfFile(h, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, 0);
+    if view.Value.is_null() {
+        let _ = windows::Win32::Foundation::CloseHandle(h);
+        return INIT_NO_SECTION;
+    }
+    let base = view.Value as *mut SharedState;
     // MapView 已持节存活；句柄可关（宿主持有的句柄与本视图都保节）。
     let _ = windows::Win32::Foundation::CloseHandle(h);
 

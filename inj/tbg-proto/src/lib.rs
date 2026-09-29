@@ -55,6 +55,7 @@ pub const ERR_NO_SLOTS: u32 = 2; // 全进程无 SHGetPropertyStoreForWindow 导
 
 /// 每条补丁记录：模块名（ASCII 截断）+ 槽位数。
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct PatchedModule {
     /// 模块名（如 `Taskbar.dll`），NUL 结尾，超长截断。
     pub name: [u8; 24],

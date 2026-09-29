@@ -7,8 +7,8 @@
 //! `SetValue` / `Commit` 逐字透传 inner。
 //!
 //! 接口语义依据（公开文档）：
-//! - IUnknown 三方法 + IPropertyStore 三方法（GetValue/SetValue/Commit）
-//!   的 vtable 次序；
+//! - IUnknown 三方法 + IPropertyStore 五方法（GetCount/GetAt/GetValue/
+//!   SetValue/Commit）的 vtable 次序；
 //! - out 参数 `PROPVARIANT` 的所有权归调用方（调用方负责
 //! PropVariantClear）——改写路径用 `ptr::write` 整体移交新值，
 //! 透传路径位搬运 + forget 避免双重释放；
@@ -43,12 +43,19 @@ struct ProxyStore {
     shared: *const SharedState,
 }
 
+/// IPropertyStore 的 COM vtable 次序（对照 windows 0.58
+/// PropertiesSystem 生成源码）：IUnknown(3) + GetCount + GetAt +
+/// GetValue + SetValue + Commit。**GetCount/GetAt 槽位必须存在**——
+/// 任务栏枚举属性时会调用它们，缺失会导致以错位参数跳进 GetValue。
 #[repr(C)]
 struct ProxyVtbl {
     query_interface:
         unsafe extern "system" fn(*mut ProxyStore, *const GUID, *mut *mut c_void) -> HRESULT,
     add_ref: unsafe extern "system" fn(*mut ProxyStore) -> u32,
     release: unsafe extern "system" fn(*mut ProxyStore) -> u32,
+    get_count: unsafe extern "system" fn(*mut ProxyStore, *mut u32) -> HRESULT,
+    get_at:
+        unsafe extern "system" fn(*mut ProxyStore, u32, *mut PROPERTYKEY) -> HRESULT,
     get_value:
         unsafe extern "system" fn(*mut ProxyStore, *const PROPERTYKEY, *mut PROPVARIANT) -> HRESULT,
     set_value:
@@ -64,6 +71,8 @@ struct InnerVtbl {
     _query_interface: usize,
     add_ref: unsafe extern "system" fn(*mut c_void) -> u32,
     release: unsafe extern "system" fn(*mut c_void) -> u32,
+    get_count: unsafe extern "system" fn(*mut c_void, *mut u32) -> HRESULT,
+    get_at: unsafe extern "system" fn(*mut c_void, u32, *mut PROPERTYKEY) -> HRESULT,
     get_value:
         unsafe extern "system" fn(*mut c_void, *const PROPERTYKEY, *mut PROPVARIANT) -> HRESULT,
     set_value:
@@ -76,6 +85,8 @@ static PROXY_VTBL: ProxyVtbl = ProxyVtbl {
     query_interface: proxy_query_interface,
     add_ref: proxy_add_ref,
     release: proxy_release,
+    get_count: proxy_get_count,
+    get_at: proxy_get_at,
     get_value: proxy_get_value,
     set_value: proxy_set_value,
     commit: proxy_commit,
@@ -133,6 +144,30 @@ unsafe extern "system" fn proxy_release(this: *mut ProxyStore) -> u32 {
     } else {
         left - 1
     }
+}
+
+/// GetCount 透传（raw 原型：this + out u32 → HRESULT）。
+unsafe extern "system" fn proxy_get_count(this: *mut ProxyStore, out: *mut u32) -> HRESULT {
+    let me = &*this;
+    if out.is_null() {
+        return E_POINTER;
+    }
+    let vt = me.inner as *mut *const InnerVtbl;
+    ((*(*vt)).get_count)(me.inner, out)
+}
+
+/// GetAt 透传（raw 原型：this + 索引 + out PROPERTYKEY → HRESULT）。
+unsafe extern "system" fn proxy_get_at(
+    this: *mut ProxyStore,
+    index: u32,
+    pkey: *mut PROPERTYKEY,
+) -> HRESULT {
+    let me = &*this;
+    if pkey.is_null() {
+        return E_POINTER;
+    }
+    let vt = me.inner as *mut *const InnerVtbl;
+    ((*(*vt)).get_at)(me.inner, index, pkey)
 }
 
 unsafe extern "system" fn proxy_get_value(

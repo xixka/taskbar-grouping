@@ -71,8 +71,11 @@ pub(crate) unsafe fn call_remote_export(
         .chain(std::iter::once(0))
         .collect();
     let bytes = path_w.len() * 2;
-    let remote = VirtualAllocEx(h, None, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE)
-        .map_err(|e| format!("inject: VirtualAllocEx failed: {e}"))?;
+    // 0.58 签名：VirtualAllocEx 返回裸指针（失败为 null，非 Result）
+    let remote = VirtualAllocEx(h, None, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+    if remote.is_null() {
+        return Err("inject: VirtualAllocEx failed (explorer memory)".into());
+    }
     let mut written: usize = 0;
     WriteProcessMemory(
         h,
@@ -92,11 +95,11 @@ pub(crate) unsafe fn call_remote_export(
         unsafe extern "system" fn(*mut c_void) -> u32,
     >(load_lib));
 
-    let t = CreateRemoteThread(h, None, 0, start, Some(remote as *mut c_void), 0, None)
+    let t = CreateRemoteThread(h, None, 0, start, Some(remote as *const c_void), 0, None)
         .map_err(|e| format!("inject: CreateRemoteThread(LoadLibraryW) failed: {e}"))?;
     let _ = WaitForSingleObject(t, 15_000);
     let _ = CloseHandle(t);
-    let _ = VirtualFreeEx(h, remote as *const c_void, 0, MEM_RELEASE);
+    let _ = VirtualFreeEx(h, remote, 0, MEM_RELEASE);
 
     // 2) 远程基址 + 本地 RVA → 远程函数地址
     let base = wait_remote_module(pid)?;

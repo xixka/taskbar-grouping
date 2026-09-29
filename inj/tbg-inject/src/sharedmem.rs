@@ -12,7 +12,7 @@ use windows::core::HSTRING;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, INVALID_HANDLE_VALUE};
 use windows::Win32::System::Memory::{
     CreateFileMappingW, MapViewOfFile, UnmapViewOfFile, FILE_MAP_READ, FILE_MAP_WRITE,
-    PAGE_READWRITE,
+    MEMORY_MAPPED_VIEW_ADDRESS, PAGE_READWRITE,
 };
 
 use tbg_proto::{SharedState, MAGIC, PROTO_VERSION, SECTION_NAME, SHARED_SIZE};
@@ -40,8 +40,13 @@ impl SharedView {
             &name,
         )
         .map_err(|e| format!("inject: CreateFileMappingW({SECTION_NAME}) failed: {e}"))?;
-        let p = MapViewOfFile(h, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, 0)
-            .map_err(|e| format!("inject: MapViewOfFile failed: {e}"))? as *mut SharedState;
+        // 0.58 签名：MapViewOfFile 返回 MEMORY_MAPPED_VIEW_ADDRESS（失败 .Value 为 null）
+        let view = MapViewOfFile(h, FILE_MAP_READ | FILE_MAP_WRITE, 0, 0, 0);
+        if view.Value.is_null() {
+            let _ = CloseHandle(h);
+            return Err("inject: MapViewOfFile failed".into());
+        }
+        let p = view.Value as *mut SharedState;
         if (*p).magic != MAGIC || (*p).proto != PROTO_VERSION {
             // 页支持节零初始化：视为全新（或旧协议）→ 写默认态
             ptr::write(p, SharedState::new_default());
@@ -61,7 +66,10 @@ impl SharedView {
 impl Drop for SharedView {
     fn drop(&mut self) {
         unsafe {
-            let _ = UnmapViewOfFile(self.ptr as *const c_void);
+            // 0.58 签名：UnmapViewOfFile 取视图结构体（非裸指针）
+            let _ = UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
+                Value: self.ptr as *mut c_void,
+            });
             let _ = CloseHandle(self._h);
         }
     }
