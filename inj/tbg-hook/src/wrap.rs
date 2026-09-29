@@ -21,8 +21,8 @@ use std::ptr;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 // windows 0.58 实源核对：E_*/S_OK 错误码在 Win32::Foundation（非 core），
-// PROPERTYKEY 在 PropertiesSystem。
-use windows::core::{BSTR, GUID, HRESULT, IUnknown, PROPVARIANT};
+// PROPERTYKEY 在 PropertiesSystem，IID 关联常量需 Interface trait 在作用域。
+use windows::core::{BSTR, GUID, HRESULT, IUnknown, Interface, PROPVARIANT};
 use windows::Win32::Foundation::{E_NOINTERFACE, E_POINTER, S_OK, HWND};
 use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, PROPERTYKEY};

@@ -206,7 +206,7 @@ unsafe fn scan_module(base: usize, hook_addr: usize) -> (u32, usize) {
             break; // 目录表结束哨兵
         }
         // INT 缺失（纯绑定导入）时名称不可靠，跳过（模块注释"已知边界"）。
-        if d.original_first_thunk != 0 && d.name_rva != 0 && d.name_rva < size_of_image {
+        if d.original_first_thunk != 0 && d.name_rva != 0 && (d.name_rva as usize) < size_of_image {
             if dll_name_matches(base, d.name_rva as usize) {
                 let int_base = (base + d.original_first_thunk as usize) as *const u64;
                 let mut i = 0usize;

@@ -25,8 +25,9 @@ mod wrap;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 
-// 0.58 实源核对：E_POINTER 在 Win32::Foundation（非 core）。
-use windows::core::HRESULT;
+// 0.58 实源核对：E_POINTER 在 Win32::Foundation（非 core）；IID 关联常量
+// 需 Interface trait 在作用域内。
+use windows::core::{HRESULT, Interface};
 use windows::Win32::Foundation::{BOOL, E_POINTER, HINSTANCE, HMODULE, HWND};
 use windows::Win32::System::LibraryLoader::{DisableThreadLibraryCalls, FreeLibraryAndExitThread};
 use windows::Win32::System::Memory::{MapViewOfFile, OpenFileMappingW, FILE_MAP_READ, FILE_MAP_WRITE};
