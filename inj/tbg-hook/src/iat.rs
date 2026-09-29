@@ -158,11 +158,19 @@ pub(crate) unsafe fn install(
             ptr::write_volatile(gpa_original_out, f as usize);
         }
     }
+    // GPA 层守卫：原函数解析失败则完全禁用该层（桩透传依赖原地址，
+    // 缺失时返回 None 会破坏 explorer 全部动态解析——宁可不打）。
+    let gpa_hook_addr = if ptr::read_volatile(gpa_original_out) == 0 {
+        0
+    } else {
+        gpa_hook_addr
+    };
 
-    // ---- 第一遍：普通 IAT + delay-load（目标函数专属窄拦截面）----
-    // GPA 桩影响面最大（explorer 全部动态解析都过我们的桩），修复轮 3
-    // 的风险分层：窄拦截面非 0 时不启用 GPA 层，仅在普通/delay 槽完全
-    // 缺失（纯动态解析场景）时第二遍兜底。
+    // 单遍全开扫描（任务 36 修复轮 5）：目标函数（普通 IAT + delay-load）
+    // 与 GetProcAddress 槽在同一次模块遍历中全部重定向。修复轮 3 的
+    // "风险分层"（窄拦截面非 0 时禁用 GPA 层）被 ground truth 证伪：
+    // 真正读 AUMID 的模块（twinui.pcshell.dll / Windows.UI.Xaml.dll）
+    // 恰恰经 delay/GPA 路径解析该函数（不在静态 IAT 命中集内）。
     let snap = match CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, 0) {
         Ok(h) => h,
         Err(_) => {
@@ -189,14 +197,15 @@ pub(crate) unsafe fn install(
                     }
                 } else if let Some((size_of_image, imp_rva, delay_rva)) = pe_headers(base) {
                     scanned += 1;
-                    let (th, _gh, names) =
-                        scan_imports(base, size_of_image, imp_rva, hook_addr, 0, true);
+                    let (th, gh, names) =
+                        scan_imports(base, size_of_image, imp_rva, hook_addr, gpa_hook_addr, true);
                     let (dh, dnames) = scan_delay(base, size_of_image, delay_rva, hook_addr);
                     names_total = names_total.saturating_add(names).saturating_add(dnames);
                     patched_total += th + dh;
                     delay_total += dh;
-                    if th + dh > 0 {
-                        record_module(s, &me.szModule, th + dh);
+                    gpa_total += gh;
+                    if th + gh + dh > 0 {
+                        record_module(s, &me.szModule, th + gh + dh);
                     }
                 } else {
                     // PE 头解析失败的模块仍计入扫描面（健康度指标）。
@@ -209,40 +218,6 @@ pub(crate) unsafe fn install(
         }
     }
     let _ = CloseHandle(snap);
-
-    // ---- 第二遍（仅当窄拦截面为 0）：GetProcAddress 兜底层 ----
-    if patched_total == 0 && gpa_hook_addr != 0 {
-        let snap2 = match CreateToolhelp32Snapshot(TH32CS_SNAPMODULE | TH32CS_SNAPMODULE32, 0) {
-            Ok(h) => h,
-            Err(_) => {
-                (*s).err = ERR_SNAPSHOT;
-                return false;
-            }
-        };
-        let mut me2 = MODULEENTRY32W {
-            dwSize: std::mem::size_of::<MODULEENTRY32W>() as u32,
-            ..Default::default()
-        };
-        if Module32FirstW(snap2, &mut me2).is_ok() {
-            loop {
-                let base = me2.modBaseAddr as usize;
-                if base != 0 && base != self_base {
-                    if let Some((size_of_image, imp_rva, _)) = pe_headers(base) {
-                        let (_th, gh, _names) =
-                            scan_imports(base, size_of_image, imp_rva, 0, gpa_hook_addr, true);
-                        gpa_total += gh;
-                        if gh > 0 {
-                            record_module(s, &me2.szModule, gh);
-                        }
-                    }
-                }
-                if Module32NextW(snap2, &mut me2).is_err() {
-                    break;
-                }
-            }
-        }
-        let _ = CloseHandle(snap2);
-    }
 
     (*s).modules_scanned = scanned;
     (*s).slots_patched = patched_total;

@@ -1010,10 +1010,12 @@ try {
   if ($st1 -match 'patched=(\d+)') { $slotOk = ([int]$Matches[1] -ge 1) }
   if (-not $slotOk -and $st1 -match 'gpa=(\d+)') { $slotOk = ([int]$Matches[1] -ge 1) }
   Assert $slotOk 'inj: interception slots >= 1 (static IAT / delay-load / GetProcAddress redirect)'
-  # 扫描器自检：本 DLL 自带目标导入锚点，self >= 1 证明扫描器工作正常
-  $selfOk = $false
-  if ($st1 -match 'self=(\d+)') { $selfOk = ([int]$Matches[1] -ge 1) }
-  Assert $selfOk 'inj: scanner self-check >= 1 (the DLL carries its own import anchor)'
+  # 扫描器自检：导入表解析健康度（names = 扫描中检视的按名导入总数；
+  # 锚点 self 因链接器 /OPT:REF 剔除不稳定，改以 names 判定解析器工作，
+  # self 数值保留为日志诊断——patched 断言已覆盖匹配器正确性）
+  $namesOk = $false
+  if ($st1 -match 'names=(\d+)') { $namesOk = ([int]$Matches[1] -ge 1000) }
+  Assert $namesOk 'inj: scanner parsed >= 1000 import names (import-table parsing healthy)'
 
   # windows created AFTER the injection must be ungrouped
   Clear-TestWindows

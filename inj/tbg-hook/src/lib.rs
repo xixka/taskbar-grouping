@@ -30,7 +30,7 @@ use std::sync::atomic::{AtomicPtr, AtomicUsize, Ordering};
 use windows::core::{HRESULT, Interface, PCSTR};
 use windows::Win32::Foundation::{BOOL, E_POINTER, FARPROC, HINSTANCE, HMODULE, HWND};
 use windows::Win32::System::LibraryLoader::{
-    DisableThreadLibraryCalls, FreeLibraryAndExitThread, GetModuleFileNameW, LoadLibraryW,
+    DisableThreadLibraryCalls, FreeLibraryAndExitThread,
 };
 use windows::Win32::System::Memory::{MapViewOfFile, OpenFileMappingW, FILE_MAP_READ, FILE_MAP_WRITE};
 use windows::Win32::System::Threading::{GetCurrentProcessId, Sleep};
@@ -51,6 +51,10 @@ const DLL_PROCESS_DETACH: u32 = 0;
 static SELF_MODULE: AtomicUsize = AtomicUsize::new(0);
 /// 共享内存映射视图（init 成功后有效）。
 static SHARED: AtomicPtr<SharedState> = AtomicPtr::new(std::ptr::null_mut());
+/// 共享节句柄（**保持打开**——run 36530913148 实测：视图保持对象存活，
+/// 但名字注册随最后一个句柄关闭而释放；宿主退出后 DLL 仅存视图时，
+/// 下一个宿主按名新建得到全新节。DLL 持句柄 = 名字与对象双引用）。
+static SECTION_HANDLE: AtomicUsize = AtomicUsize::new(0);
 /// `SHGetPropertyStoreForWindow` 的原始地址（导出表解析，见 iat::install）。
 static ORIGINAL_FN: AtomicUsize = AtomicUsize::new(0);
 /// `GetProcAddress` 的原始地址（导出表解析，见 iat::install）。
@@ -95,6 +99,7 @@ unsafe extern "system" fn DllMain(hinst: HINSTANCE, reason: u32, _reserved: *mut
                 iat::remove();
             }
         }
+        close_section_handle();
     }
     BOOL(1)
 }
@@ -207,8 +212,13 @@ pub unsafe extern "system" fn tbg_hook_init(_param: *mut c_void) -> u32 {
         return INIT_NO_SECTION;
     }
     let base = view.Value as *mut SharedState;
-    // MapView 已持节存活；句柄可关（宿主持有的句柄与本视图都保节）。
-    let _ = windows::Win32::Foundation::CloseHandle(h);
+    // **句柄保持打开**（存入 SECTION_HANDLE，stop/unload 关闭）：视图维持
+    // 对象存活，但名字注册需要句柄——上一版在此 CloseHandle 是"宿主退出
+    // 后节名被释放、status 新建全新节"的直接根因（run 36530913148 实测：
+    // DLL 驻留 modules=1 而宿主看到 detached/gen=0 全零节）。
+    SECTION_HANDLE.store(h.0 as usize, Ordering::Relaxed);
+    // 自检锚点引用（防链接器 /OPT:REF 剔除 → 导入表落位 → self_slots 计数）
+    std::hint::black_box(&_SELF_IMPORT);
 
     let s = base;
     if (*s).magic != MAGIC || (*s).proto != PROTO_VERSION {
@@ -252,21 +262,17 @@ pub unsafe extern "system" fn tbg_hook_init(_param: *mut c_void) -> u32 {
     }
 
     (*s).state.store(STATE_ACTIVE, Ordering::Release);
-
-    // 自钉扎（任务 36 修复轮 4）：实测宿主进程退出后本 DLL 会从 explorer
-    // 中消失（机制待诊断：远程 LoadLibraryW 的进程级引用计数理论上应
-    // 保持常驻——run 36525398321：ACTIVE + patched=5 + explorer pid 未变，
-    // 下一次宿主却看到全新节）。对自身再 LoadLibraryW 一次（+1 引用）：
-    // 未知路径的单次递减不再致命；stop 走两段释放仍可干净卸载。
-    // 诊断证据（inject 后模块表×2 + 事件日志）见 Phase INJ 插桩。
-    let hmod = HMODULE(SELF_MODULE.load(Ordering::Relaxed) as *mut c_void);
-    let mut path_buf = [0u16; 512];
-    let n = GetModuleFileNameW(hmod, &mut path_buf);
-    if n > 0 && (n as usize) < path_buf.len() {
-        let _ = LoadLibraryW(windows::core::PCWSTR::from_raw(path_buf.as_ptr()));
-    }
-
     INIT_OK
+}
+
+/// 关闭共享节句柄（stop / unload_self / DETACH 收尾；幂等）。
+unsafe fn close_section_handle() {
+    let h = SECTION_HANDLE.swap(0, Ordering::Relaxed);
+    if h != 0 {
+        let _ = windows::Win32::Foundation::CloseHandle(
+            windows::Win32::Foundation::HANDLE(h as *mut c_void),
+        );
+    }
 }
 
 /// init 失败路径的自清理：补丁未生效（无在途调用），直接摘除自身，
@@ -274,6 +280,7 @@ pub unsafe extern "system" fn tbg_hook_init(_param: *mut c_void) -> u32 {
 /// explorer 内不残留失效 DLL。状态先写 ERROR 再卸载：宿主自己的视图
 /// 保节存活，诊断面板仍可读到失败细节。
 unsafe fn unload_self(code: u32) -> u32 {
+    close_section_handle();
     let hmod = HMODULE(SELF_MODULE.load(Ordering::Relaxed) as *mut c_void);
     FreeLibraryAndExitThread(hmod, code)
 }
@@ -296,14 +303,12 @@ pub unsafe extern "system" fn tbg_hook_stop(_param: *mut c_void) -> u32 {
     // 宽限窗口：让可能位于本 DLL 代码内的在途调用返回（理论竞态，
     // plan v2 §5 已知限制②；业界同类工具多以常驻规避，本版选择完整卸载）。
     Sleep(1500);
+    // 释放共享节句柄（对象随最后一个视图/句柄消亡；宿主 stop 进程自身
+    // 的句柄+视图在其退出时释放——名字与对象自此彻底回收）。
+    close_section_handle();
     let hmod = HMODULE(SELF_MODULE.load(Ordering::Relaxed) as *mut c_void);
-    // 卸载走单段 FreeLibraryAndExitThread（对任意计数安全：原子化
-    // "递减 + 线程退出"，计数归零时卸载发生在本线程退出之后）。**不做**
-    // 先行 FreeLibrary 再 FAET 的两段式——若外部发生过引用递减，先行
-    // FreeLibrary 可能当场归零并解除映射，后续指令在死代码上执行。
-    // 自钉扎的代价：正常路径（计数 2）下 FAET 后余 1，模块以"补丁已摘、
-    // 状态 UNLOADED"的惰性形态驻留至 explorer 重启——功能正确（分组
-    // 已回原生），残留为文档化的已知取舍。
+    // 单段 FreeLibraryAndExitThread：原子化"递减 + 线程退出"，对任意
+    // 计数安全（计数归零时卸载发生在本线程退出之后）。
     FreeLibraryAndExitThread(hmod, STOP_OK);
     // FreeLibraryAndExitThread 不返回；显式收尾值仅为满足返回类型。
     STOP_OK

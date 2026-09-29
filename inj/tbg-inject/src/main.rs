@@ -266,7 +266,7 @@ pub(crate) fn do_stop() -> Result<String, String> {
             return Err(format!("stop: hook stop returned {code}"));
         }
         let mut msg = format!(
-            "stop: ok — hooks removed, dll unload best-effort (generation {})\n",
+            "stop: ok — hooks removed, dll unloaded (generation {})\n",
             s.generation.load(std::sync::atomic::Ordering::Relaxed)
         );
         msg.push_str(&fmt_traffic_line(s));
@@ -295,7 +295,7 @@ pub(crate) fn do_status() -> String {
     unsafe {
         let pid = injector::explorer_pid();
         match sharedmem::SharedView::ensure() {
-            Ok(v) => fmt_status(v.as_ref(), pid),
+            Ok(v) => fmt_status(v.as_ref(), pid, v.existed),
             Err(e) => format!("status: {e}"),
         }
     }
@@ -360,12 +360,13 @@ fn patched_names(s: &SharedState) -> String {
 }
 
 /// 完整状态输出（CI 断言锚点：`state   :`/`hook`/`patched=`/`calls=` 等）。
-pub(crate) fn fmt_status(s: &SharedState, pid: Option<u32>) -> String {
+pub(crate) fn fmt_status(s: &SharedState, pid: Option<u32>, existed: bool) -> String {
     let mut out = String::new();
     out.push_str("edition : tbg-inject (route A, in-process hook)\n");
     out.push_str(&format!(
-        "section: state={} self_module={:#x} size={}\n",
+        "section: state={} existed={} self_module={:#x} size={}\n",
         if s.magic == tbg_proto::MAGIC { "valid" } else { "invalid" },
+        if existed { "yes" } else { "no (created fresh)" },
         s.self_module,
         s.size,
     ));
@@ -423,8 +424,9 @@ mod tests {
         s.calls_seen = AtomicU32::new(214);
         s.aumid_served = AtomicU32::new(63);
         s.mode = MODE_GROUP;
-        let out = fmt_status(&s, Some(4816));
+        let out = fmt_status(&s, Some(4816), false);
         assert!(out.contains("state   : active (generation 0)"), "{out}");
+        assert!(out.contains("section: state=valid existed=no (created fresh)"), "{out}");
         assert!(out.contains("hook   : modules scanned=142 patched=4 delay=2 gpa=12 self=1 names=5150"), "{out}");
         assert!(out.contains("calls=214"), "{out}");
         assert!(out.contains("aumid-served=63"), "{out}");
