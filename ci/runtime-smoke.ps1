@@ -1021,7 +1021,8 @@ try {
   Clear-TestWindows
   Start-Sleep -Seconds 2
   $live = Spawn-Notepads 2
-  Start-Sleep -Seconds 3
+  # round 8: 5s wait rules out lazy async AUMID resolution by the taskbar
+  Start-Sleep -Seconds 5
   $btns1 = Get-TaskbarButtonNames
   $np1 = @($btns1 | Where-Object { $_ -like '*Notepad*' }).Count
   Assert ($np1 -eq 2) "inj: post-inject notepads get TWO separate taskbar buttons (got $np1)"
@@ -1066,6 +1067,33 @@ try {
   $inj2 = & $exeInj inject | Out-String
   Log "inj re-inject output >>> $inj2"
   Assert (($LASTEXITCODE -eq 0) -and ($inj2 -cmatch 'inject: ok')) 'inj: re-inject into the new explorer succeeds'
+  # --- round 8 decisive experiment: early injection on a fresh shell ---
+  # Instrumentation (round 7) showed the taskbar only reads
+  # System.Taskbar.TabList through the patched IAT and never reads
+  # PKEY_AppUserModel_ID, while external AUMID writes do change grouping
+  # (phase L). Leading hypothesis: the AUMID reader resolved and cached the
+  # original function pointer before our injection. Injecting into a fresh
+  # explorer BEFORE any window exists tests this: if the buttons split here,
+  # early interception works and the pointer cache is the blocker.
+  $shellReady = $false
+  $deadlineShell = (Get-Date).AddSeconds(20)
+  while ((Get-Date) -lt $deadlineShell) {
+    $exl = Get-Process -Name explorer -ErrorAction SilentlyContinue | Where-Object { $_.MainWindowHandle -ne 0 }
+    if ($exl) { $shellReady = $true; break }
+    Start-Sleep -Milliseconds 250
+  }
+  Assert $shellReady 'inj: fresh explorer shell window ready after restart'
+  $live2 = Spawn-Notepads 2
+  Start-Sleep -Seconds 5
+  $btns3 = Get-TaskbarButtonNames
+  $np3 = @($btns3 | Where-Object { $_ -like '*Notepad*' }).Count
+  Log "inj: post-restart notepad buttons: $np3 (2 = early injection intercepts the AUMID read)"
+  $st5 = & $exeInj status | Out-String
+  $st5flat = $st5 -replace "`r|`n", ' '
+  Log "inj status after post-restart windows: $st5flat"
+  Assert ($np3 -eq 2) "inj: post-restart notepads get TWO separate taskbar buttons with early injection (got $np3)"
+  Clear-TestWindows
+  Start-Sleep -Seconds 2
   $sp2 = & $exeInj stop | Out-String
   Assert (($LASTEXITCODE -eq 0) -and ($sp2 -cmatch 'stop: ok')) 'inj: stop after re-inject exits 0'
 
