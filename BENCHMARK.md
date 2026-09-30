@@ -69,4 +69,4 @@ Windows PowerShell 控制台 / regedit / Edge 短时）；已知限制：Explore
 | 分组效果（Win11） | 不变（已知限制⑤；断言为稳定性口径 + 金丝雀） | run 36654985869（早期注入决定性实验） |
 | 摘钩复原 | stop 后原生分组即回（补丁 LIFO 恢复 + DLL 卸载） | runtime-smoke Phase INJ（门禁） |
 | explorer 重启 | 钩子随 shell 消亡；status 见全新 detached 节；再 inject 重挂载 | 同上（门禁） |
-| 发布 zip 尺寸 | tbg-inject-dev-x86_64-windows.zip：**CI 回填**（exe + dll 同包）；tbg-lite-dev zip 153,637 字节口径见 §1 | dev-release 工作流（SHA256SUMS + attestation） |
+| 发布 zip 尺寸 | tbg-inject-dev-x86_64-windows.zip：**146,264 字节（143 KB）**（exe + dll 同包，run 36658504730）；tbg-lite-dev zip：189,438 字节（同 run） | dev-release 工作流（SHA256SUMS + attestation） |
