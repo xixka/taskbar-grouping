@@ -1,13 +1,22 @@
 # tbg-lite
 
-Zero-injection taskbar grouping controller for Windows 10/11, written in Rust.
+Taskbar grouping controller for Windows 10/11, written in Rust — in **two
+editions** (task 33–37, plan v2 §0-6):
 
-It controls taskbar button grouping by rewriting each window's
-`PKEY_AppUserModel_ID` through the documented Shell property-store API
-(`SHGetPropertyStoreForWindow`) — no DLL injection, no shell patching, no
-admin rights. Single exe, ~1.5 MB private working set.
+- **tbg-lite** (main edition, zero-injection): controls taskbar button
+  grouping by rewriting each window's `PKEY_AppUserModel_ID` through the
+  documented Shell property-store API (`SHGetPropertyStoreForWindow`) — no
+  DLL injection, no shell patching, no admin rights. Single exe, ~1.5 MB
+  private working set.
+- **tbg-inject** (injection edition, route A): a separate `tbg-inject.exe` +
+  `tbg_hook.dll` pair that redirects the same API **inside** explorer via an
+  IAT slot patch and a delegating `IPropertyStore`, so the taskbar reads the
+  rewritten AUMID in-process while the windows' real properties are never
+  touched (no restore table needed — unhook and native grouping returns).
+  See "The injection edition" below for usage and its distinct risk profile.
 
-Two strategy lines (`watch --strategy`):
+Both editions share the two strategy lines (`watch --strategy` for tbg-lite,
+`inject --strategy` for tbg-inject):
 
 - `ungroup` (default) — per-window suffix `~TBG~w<HWND>`; enabling the watch
   ungroups everything on the taskbar, including windows that already existed
@@ -19,7 +28,9 @@ Two strategy lines (`watch --strategy`):
 ## Installation
 
 - **Stable**: [latest release](https://github.com/xixka/taskbar-grouping/releases/latest)
-  (`v*` tags; zip + `SHA256SUMS.txt` + build-provenance attestation).
+  (`v*` tags; two zips — `tbg-lite-<tag>-x86_64-windows.zip` single exe,
+  `tbg-inject-<tag>-x86_64-windows.zip` exe + `tbg_hook.dll` — each with
+  `SHA256SUMS.txt` and its own build-provenance attestation).
 - **Dev channel**: the rolling [`dev` prerelease](https://github.com/xixka/taskbar-grouping/releases/tag/dev) —
   rebuilt from the latest push that passed the full CI suite (see
   "Evidence & verification" below); same artifact format, prerelease
@@ -65,10 +76,81 @@ is graceful (hooks removed, stats printed).
   re-marked automatically; if the process exits abnormally 3 times in a row,
   the circuit breaker removes the autostart entry to prevent a boot loop.
 
+## The injection edition (tbg-inject)
+
+`tbg-inject.exe` + `tbg_hook.dll` (keep the DLL next to the exe) implement
+route A with a clean-room design (plan v2 §5): no private symbols, no
+inline hooks, no memory code patches.
+
+```
+tbg-inject                              (no arguments: interactive menu)
+tbg-inject inject [--strategy ungroup|group] [--group <NAME>]
+tbg-inject stop                         (unhook + unload + final counters)
+tbg-inject status                       (hook state, patched modules, traffic)
+```
+
+How it works — the host locates explorer, loads the DLL into it with
+`CreateRemoteThread + LoadLibraryW`, then calls its `tbg_hook_init` export
+remotely. The DLL walks explorer's module import tables and redirects every
+static import of `shell32!SHGetPropertyStoreForWindow` (plus its
+`GetProcAddress`-resolved and delay-load call sites) to a stub; the stub
+calls the original and wraps the returned `IPropertyStore` (including the
+`IPropertyStoreCache` view) in a delegating object that rewrites only
+`PKEY_AppUserModel_ID` reads (line-1 per-window suffix / line-2 shared
+AUMID, same markers as tbg-lite). Everything else — `GetCount`, `GetAt`,
+`SetValue`, `Commit`, other keys — passes through untouched.
+
+**Windows 11 grouping limitation (known limitation 5, measured on CI
+2026-09-30).** The interception above is verified working at the API level
+— the taskbar queries the wrapped stores — but on Windows 11 it reads only
+`System.Taskbar.TabList` through them and resolves the grouping AUMID via
+internal WinRT/CTaskBand paths instead (confirmed by full proxy
+instrumentation and by an early-injection experiment on a fresh shell; the
+community taskbar-grouping mod achieves the effect only by hooking
+Taskbar.dll private symbols, which this project's clean-room rules forbid).
+Consequences on Windows 11: the hook installs and reports cleanly, native
+grouping is left undisturbed, but window grouping does **not** change while
+it is active. The CI asserts this stability property (doubling as a canary:
+if a future Windows routes the read through the documented call, the
+assertion flips and the limitation is lifted). Windows 10 behavior is
+untested (CI runs Windows 11 only). For grouping changes on Windows 11
+today, use the default tbg-lite edition, whose external AUMID writes are
+consumed by the same internal pipeline and are verified end-to-end in CI.
+
+Edition boundaries:
+
+- **No autostart, no restore table.** Injection is an explicit, deliberate
+  action; because real properties are never written, unhooking is the whole
+  "restore".
+- **Mutually exclusive with `tbg-lite watch`** — one taskbar, one edition.
+  Stop one before starting the other.
+- **No icon/jumplist translation** — this edition intercepts AUMID reads,
+  not the rest of the property surface.
+- If explorer restarts, the hook dies with it: the shared section's
+  lifetime is tied to its mappings, so a later `tbg-inject status` sees a
+  fresh detached section and a fresh `inject` re-attaches to the new
+  explorer.
+
+Risk profile (expect it, plan for it):
+
+- **Antivirus products will likely flag this edition.** Injecting a DLL into
+  explorer is a real injection technique, not a heuristic artifact — engines
+  are right to score it. The release carries the same
+  SHA256SUMS + build-provenance attestation so you can verify the binary
+  you run is the one built from this repository; if your engine blocks it,
+  that is the product working as designed. Only run it if you accept
+  running injection-based tools at all.
+- The DLL runs inside explorer: a bug there can take the shell down (CI
+  gates the pair end-to-end, but that risk is inherent to the route).
+- Unloading has a theoretical in-flight-call window (1.5 s grace period
+  before `FreeLibraryAndExitThread`; documented in plan v2 §5).
+
 ## Coexistence with Windhawk
 
 tbg-lite never injects into explorer, so it can run alongside Windhawk and its
-mods. Two things to keep in mind:
+mods. (The injection edition is the exception: `tbg-inject` occupies the same
+in-process territory as Windhawk mods — do not run them against the same
+mechanism.) Two things to keep in mind:
 
 - The `taskbar-grouping` Windhawk mod implements the same feature via symbol
   hooks **inside** explorer; running both simultaneously would fight over the
@@ -86,13 +168,19 @@ mods. Two things to keep in mind:
   [`docs/coverage-matrix.md`](docs/coverage-matrix.md)
 - Measured size / memory / stress numbers: [`BENCHMARK.md`](BENCHMARK.md)
 - CI (windows-latest, a real interactive Windows session — per the maintainer
-  its runs count as real-machine runs): `cargo build --release --locked` +
-  47 unit tests + a 104-assertion runtime smoke (dual-line AUMID rewrites and
-  restores, startup sweep, interactive menu, HKCU-Run autostart, `.lnk` tile
-  pin/unpin with the taskbarpin verb, tile↔live-window linkage via UIA,
-  explorer-restart re-sweep, ring log, circuit breaker) and a 30+ assertion
-  acceptance suite (50-window stress per line, <10 MB memory gate, multi-app
-  coverage, UIA taskbar-button dumps).
+  its runs count as real-machine runs): `cargo build --release --locked
+  --workspace` (both editions) + 60+ unit tests + a 131-assertion runtime
+  smoke (dual-line AUMID rewrites and restores, startup sweep, interactive
+  menu, HKCU-Run autostart, `.lnk` tile pin/unpin with the taskbarpin verb,
+  tile↔live-window linkage via UIA, explorer-restart re-sweep, ring log,
+  circuit breaker, plus the injection-edition Phase INJ end-to-end:
+  artifacts, CLI codes, menu, patched-IAT interception with real AUMIDs
+  untouched and native grouping undisturbed (known limitation 5, see
+  below), interception counters with per-method proxy instrumentation,
+  unhook restore, explorer-restart re-inject, and an early-injection
+  decisive experiment) and a 30+ assertion acceptance suite (50-window
+  stress per line, <10 MB memory gate, multi-app coverage, UIA
+  taskbar-button dumps).
 
 ## Antivirus false positives
 

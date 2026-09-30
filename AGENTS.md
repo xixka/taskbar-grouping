@@ -13,6 +13,13 @@ API（`SHGetPropertyStoreForWindow` + `PKEY_AppUserModel_ID`）改写运行中�
 IAT 重定向 `shell32!SHGetPropertyStoreForWindow` + COM 委托属性存储，
 零私有符号、零 Windhawk 引用（GPL 红线，plan v2 §5/§6-1）。两版本互斥
 运行（同一任务栏二选一）；注入版无自启、无还原表（摘钩即回原状）。
+**Win11 分组限制（已知限制⑤，2026-09-30 任务 36 实测）**：Win11 任务栏
+的分组 AUMID 读取不经该文档化调用（代理插桩仅观察到
+`System.Taskbar.TabList` 读；早期注入实验排除指针缓存）——注入版基础
+设施端到端为绿但分组拦截在 Win11 不可达，Phase INJ 以稳定性断言 +
+证据日志 documenting（详见 plan v2 §5 已知限制⑤与 README 注入版章节）；
+Win10 未测。Win11 上改分组请用主版本（外部写入已被同一内部管线消费，
+Phase L 全绿）。
 
 **双线路并行开发（2026-09-22 维护者决策）**：两条策略线路同时开工、同等维护，
 通过 CLI 参数切换（任务 8 已实现：`watch --strategy ungroup|group`）——
@@ -31,7 +38,9 @@ Phase 0b（任务 5-10）已验收：runtime-smoke + phase0b-acceptance 断言�
 33 项（含交互菜单 Phase M），任务 19 起扩至 47 项（含自启 Phase I），
 任务 16 起扩至 59 项（含 pin Phase P），任务 17 起扩至 72 项（含
 固定/取消固定 Phase T），任务 18 起扩至 86 项（含磁贴联动 Phase L），任务 20 起扩至 104 项
-（含常驻加固 Phase X：环形日志/explorer 重启重扫/熔断）。
+（含常驻加固 Phase X：环形日志/explorer 重启重扫/熔断），任务 36 起扩至
+131 项（含注入版 Phase INJ 端到端 27 断言：注入/状态/摘钩/复原/重注入/
+早期注入决定性实验——分组断言为已知限制⑤稳定性口径）。
 
 **固定磁贴（任务 16/17/18，Phase 2）**：`pin` 命令为线路二分组生成带共享
 AUMID `TBG.Group.<NAME>` 的 `.lnk`（`src/shortcut.rs`，mklnkwaumid
@@ -68,11 +77,14 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 
 ## 构建 / 测试 / lint 命令
 
-- `cargo build --release` —— 唯一经验证的构建命令；提取自
-  `.github/workflows/ci.yml`，已由 CI 实际运行通过（windows-latest）。本仓库验收
-  门禁 = 该命令在 CI 绿灯。
+- `cargo build --release --workspace` —— 唯一经验证的构建命令（任务 34 起
+  `--workspace`：根包 tbg-lite + `inj/` 三成员 tbg-proto / tbg-hook /
+  tbg-inject）；提取自 `.github/workflows/ci.yml`，已由 CI 实际运行通过
+  （windows-latest）。本仓库验收门禁 = 该命令在 CI 绿灯。注入版产物：
+  `inj/tbg-hook` 编译为 `tbg_hook.dll`（cdylib，[lib] name 指定），
+  `inj/tbg-inject` 编译为 `tbg-inject.exe`（bin）。
 - `ci/runtime-smoke.ps1` —— CI 运行时冒烟（任务 9 + 13 + 14 + 19 + 16 + 17
-  + 18 + 20，
+  + 18 + 20 + 36，
   `runtime-smoke` job）：在 windows-latest 真实会话拉起 notepad 窗口，断言
   双线路 AUMID 改写/复原、任务 13 启动扫存量（Phase 0 线路一 / Phase B
   线路二预开窗口断言）、任务 14 交互菜单（Phase M 双会话：stdin 预写驱动，
@@ -215,13 +227,20 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 
 ## 条件路由
 
+- 改注入版（`inj/` 成员）→ 读 `inj/tbg-hook/src/lib.rs`（DllMain 纪律 +
+  导出入口 + IAT 桩）、`inj/tbg-hook/src/iat.rs`（PE 导入表扫描，布局由
+  单元测试钉死）、`inj/tbg-hook/src/wrap.rs`（COM 委托，vtable 次序对照
+  windows 0.58 生成源码）、`inj/tbg-inject/src/injector.rs`（远程三段式）；
+  改共享协议 → 读 `inj/tbg-proto/src/lib.rs`（两侧同源编译，布局即契约）
 - 改 CI 或构建命令 → 先读 `.github/workflows/ci.yml`
 - 改依赖或 release profile → 读 `Cargo.toml`；体积/内存口径参考
   docs/phase0b-acceptance.md §4（v1 §6 预算表已随 v1 存档于 git 历史）
 - 改产物元数据（版本资源/应用清单）→ 读 `build.rs`（任务 32；winresource
   走 build-dependencies，`Cargo.toml` 与 `Cargo.lock` 必须同笔提交）
 - 实现新功能 → 在 docs/plan.md v2 §3 任务清单找到对应任务号，按任务号实现
-  并单独提交；注入类条目不实现（路线 A 为备用，见 plan v2 §5）
+  并单独提交；注入版（`inj/`）已随任务 34-37 落地（Win11 分组限制见
+  plan v2 §5 已知限制⑤），后续注入相关改动维持零私有符号/零 Windhawk
+  引用红线（若需参考 mod 行为须先重评 GPL，plan v2 §6-1）
 - 改双线路行为 → 读 src/winevent.rs（apply_ungroup / apply_group）与
   src/appid.rs（标记定义），确认互斥标记与 restore 双路径不被破坏
 - 改本文件 → 增量合并，不覆盖既有规则

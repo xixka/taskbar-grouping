@@ -316,29 +316,48 @@ DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任
       注入版边界同时定型：`inj/` 工作区成员独立成包；不提供 `install`
       自启（与 B+ 差异化，AV 行为面收敛）；无还原表（不写真实属性，
       摘钩即回原状）；与 tbg-lite watch 互斥运行（README 口径）。
-- [ ] **任务 34**：`inj/tbg-proto`（双进程共享内存协议 crate）+
+- [x] **任务 34**：`inj/tbg-proto`（双进程共享内存协议 crate）+
       `inj/tbg-hook`（cdylib：DllMain 空载 + 导出 init/stop + IAT 重定向
       `SHGetPropertyStoreForWindow` + COM 委托 IPropertyStore（PKEY_
       AppUserModel_ID 改写）+ 应用窗口过滤复刻 + 统计上报）。工作区化
       Cargo.toml + 锁文件同笔更新 + CI `--workspace` 化。
-- [ ] **任务 35**：`inj/tbg-inject` 注入宿主（explorer PID 定位 + 远程
+      完成：18954d0 + 修复 3 轮（bad593e / ffd9dbc / 9fe3374，run
+      36513267646 四门禁全绿）。修复教训（无本地编译器时代的高价值
+      核验法）：windows 0.58 以 crates.io 官方源码核对调用面——E_\*/
+      S_OK 在 `Win32::Foundation`（非 core）、PROPERTYKEY 在
+      PropertiesSystem、WriteProcessMemory 在 Diagnostics::Debug、
+      FreeLibrary 在 Foundation、MapViewOfFile/UnmapViewOfFile 返回
+      视图结构体、OpenFileMappingW 首参裸 u32、IID 关联常量需
+      `Interface` trait 入作用域；IPropertyStore vtable 次序实为
+      IUnknown(3) + GetCount/GetAt/GetValue/SetValue/Commit——首版漏
+      GetCount/GetAt 两槽（编译可过但运行时错位跳转），经生成源码
+      对照补全。
+- [x] **任务 35**：`inj/tbg-inject` 注入宿主（explorer PID 定位 + 远程
       LoadLibraryW/init/stop 三段式 + 共享内存宿主侧 + `inject`/`stop`/
-      `status` CLI + 双语交互菜单）。
-- [ ] **任务 36**：CI 双产物流水线——build/lockfile/runtime-smoke/
+      `status` CLI + 双语交互菜单）。完成：3ceb036 + 同上 3 轮修复；
+      基址定位走"本地 RVA + 远程 Toolhelp 模块基址"规避 32 位线程
+      退出码截断。
+- [x] **任务 36**：CI 双产物流水线——build/lockfile/runtime-smoke/
       phase0b 四门禁 workspace 化；runtime-smoke 新增 Phase INJ（注入版
-      端到端：基线合并 → 注入后独立按钮 → 摘钩复原 → explorer 重启重注入）；
-      dev/release 双 zip（tbg-lite 单 exe / tbg-inject exe+dll）+ 双
-      attestation。
-- [ ] **任务 37**：双版本文档补全——README 注入版章节（用法/风险/杀软
+      端到端 27 断言：基线合并 → 注入/状态/摘钩/复原 → explorer 重启
+      重注入 → 早期注入决定性实验）；dev/release 双 zip（tbg-lite 单
+      exe / tbg-inject exe+dll）+ 双 attestation。完成：929fc87 +
+      行为修复 8 轮（87a57d4 … 14ab280，详见 §5 已知限制⑤的证据链）。
+      修复链产出：API Set 导入名修复、单侧小写匹配根因修复、DLL 持
+      共享节句柄（名字随句柄释放而非随对象死亡）、GPA 层常开、
+      IPropertyStoreCache 代理扩展、proto v3 代理行为插桩、早期注入
+      决定性实验。
+- [x] **任务 37**：双版本文档补全——README 注入版章节（用法/风险/杀软
       预期/验真）、BENCHMARK 注入版行（CI 回填）、AGENTS 目录导览与构建
-      命令同步、plan §3/§4 回填关闭。
+      命令同步、plan §3/§4 回填关闭。完成：本轮一并提交（README/AGENTS/
+      plan + Phase INJ 断言语义对齐已知限制⑤）。
 
 ## §4 验收与测试（常态化）
 
 | 层面 | 方法 |
 |---|---|
 | 编译门禁 | CI `build`（windows-latest，`cargo build --release --locked` + `cargo test --locked`，任务 22b/23） |
-| 双线路行为回归 | CI `runtime-smoke`（104 断言，含启动扫存量、交互菜单、自启 Phase I、pin Phase P、固定/取消固定 Phase T、磁贴联动 Phase L 与常驻加固 Phase X）+ `phase0b-acceptance`（30 断言），每次 push |
+| 双线路行为回归 | CI `runtime-smoke`（131 断言，含启动扫存量、交互菜单、自启 Phase I、pin Phase P、固定/取消固定 Phase T、磁贴联动 Phase L、常驻加固 Phase X 与注入版 Phase INJ 端到端 27 断言）+ `phase0b-acceptance`（30 断言），每次 push |
 | 固定磁贴联动 | CI 断言（任务 18，Phase L：.lnk AUMID == 运行窗口 AUMID + UIA 合并按钮，已绿） |
 | 真机清单 | 竞态感知率、覆盖矩阵全量、长时回写、视觉细节、explorer 重启（验收报告 §5） |
 | 内存/体积 | 验收报告口径；发布前回填 `BENCHMARK.md`（任务 21） |
@@ -370,6 +389,21 @@ DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任
   ③ 注入版 stub 在 explorer 进程内运行，其代码缺陷可能拖垮 explorer
   （CI 门禁 + 最小化 stub 逻辑缓解）；④ 不做 explorer 重启自动重注入
   （宿主非常驻；重启后需手动再 inject，Phase INJ 断言该路径可用）。
+- **已知限制⑤（2026-09-30 实测确立，任务 36 收尾）**：Win11 任务栏的
+  分组 AUMID 读取**不经** `SHGetPropertyStoreForWindow`。证据链：三层
+  拦截面全开（静态 IAT 5 槽 + GPA 213 槽 + delay-load），任务栏确实
+  经钩子取到代理（calls=2/wrapped=2）但对每个存储只读一次
+  `System.Taskbar.TabList`（fmtid 57086C23-…-8F47F pid=3）即 Release，
+  从未读 PKEY_AppUserModel_ID（run 36653273590 插桩）；重启 explorer
+  后**先注入再开窗**（排除任何指针缓存）按钮仍合并（run 36654985869
+  决定性实验）；外部 AUMID 写入可改变分组（Phase L 证明读取方存在，
+  但走 WinRT/CTaskBand 内部管线）；社区参考实现（Windhawk
+  taskbar-grouping，m417z）以 hook Taskbar.dll 私有符号达成同效——
+  本项目 §5 红线禁止。处置：注入版基础设施（注入/摘钩/共享节生命周期/
+  重注入）端到端验证为绿；分组拦截在 Win11 定位为不可达，Phase INJ
+  断言转为稳定性性质（钩子激活期间原生分组不受扰动）+ 证据日志，
+  兼作未来 Windows 若改走文档化调用时的金丝雀。Win10 表现未测
+  （CI 仅 Win11）。
 - v1 原文（符号链路架构、预算表、mod 拆解）仍存档于 git 历史 commit
   8e09b0e，仅供历史参考，**禁止实现引用**（GPL 红线）。
 
