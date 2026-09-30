@@ -383,12 +383,60 @@ pub(crate) fn fmt_status(s: &SharedState, pid: Option<u32>, existed: bool) -> St
     }
     out.push_str(&fmt_hook_line(s));
     out.push_str(&fmt_traffic_line(s));
+    out.push_str(&fmt_proxy_line(s));
     out.push_str(&format!(
         "config  : strategy={} enabled={}\n",
         if s.mode == MODE_GROUP { "group" } else { "ungroup" },
         s.enabled.load(std::sync::atomic::Ordering::Relaxed)
     ));
     out
+}
+
+/// 代理行为插桩行（任务 36 修复轮 7：任务栏对委托对象的真实调用序列）。
+pub(crate) fn fmt_proxy_line(s: &SharedState) -> String {
+    let rd = |a: &std::sync::atomic::AtomicU32| a.load(std::sync::atomic::Ordering::Relaxed);
+    format!(
+        "proxy  : qi(store={} cache={} other={} iid={}) riid(other={} last={})\n\
+          m(count={} at={} value={} andstate={} set={} commit={} rel={}) key={}\n",
+        rd(&s.qi_store),
+        rd(&s.qi_cache),
+        rd(&s.qi_other),
+        guid_hex(&s.qi_last_iid),
+        rd(&s.riid_other),
+        guid_hex(&s.riid_last),
+        rd(&s.m_getcount),
+        rd(&s.m_getat),
+        rd(&s.m_getvalue),
+        rd(&s.m_getandstate),
+        rd(&s.m_setvalue),
+        rd(&s.m_commit),
+        rd(&s.m_release),
+        key_hex(&s.last_key),
+    )
+}
+
+/// 16 字节内存布局 GUID → 标准字符串（全 0 → "-"）。
+fn guid_hex(b: &[u8]) -> String {
+    if b.len() < 16 || b[..16].iter().all(|&x| x == 0) {
+        return "-".into();
+    }
+    let d1 = u32::from_le_bytes([b[0], b[1], b[2], b[3]]);
+    let d2 = u16::from_le_bytes([b[4], b[5]]);
+    let d3 = u16::from_le_bytes([b[6], b[7]]);
+    let tail: String = b[8..16].iter().map(|x| format!("{:02X}", x)).collect();
+    format!("{{{:08X}-{:04X}-{:04X}-{}-{}}}", d1, d2, d3, &tail[..4], &tail[4..])
+}
+
+/// 20 字节 PROPERTYKEY（fmtid + pid）→ 字符串。
+fn key_hex(b: &[u8; 20]) -> String {
+    if b.iter().all(|&x| x == 0) {
+        return "-".into();
+    }
+    format!(
+        "{} pid={}",
+        guid_hex(&b[..16]),
+        u32::from_le_bytes([b[16], b[17], b[18], b[19]])
+    )
 }
 
 #[cfg(test)]
@@ -430,6 +478,8 @@ mod tests {
         assert!(out.contains("hook   : modules scanned=142 patched=4 delay=2 gpa=12 self=1 names=5150"), "{out}");
         assert!(out.contains("calls=214"), "{out}");
         assert!(out.contains("aumid-served=63"), "{out}");
+        assert!(out.contains("proxy  : qi(store="), "{out}");
+        assert!(out.contains("m(count="), "{out}");
         assert!(out.contains("strategy=group"), "{out}");
         assert!(out.contains("[shell32 x1]"), "{out}");
     }

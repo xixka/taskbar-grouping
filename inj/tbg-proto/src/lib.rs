@@ -19,9 +19,9 @@ pub const SECTION_NAME: &str = "Local\\tbg_lite_inject_v1";
 
 /// 协议魔数 "TBG1"。
 pub const MAGIC: u32 = 0x5442_4731;
-/// 协议版本（布局不兼容演进时递增，init 侧拒载旧节）。v2（任务 36
-/// 修复轮 2）：新增 delay/gpa/self/names 四个诊断字段。
-pub const PROTO_VERSION: u32 = 2;
+/// 协议版本（布局不兼容演进时递增，init 侧拒载旧节）。v3（任务 36
+/// 修复轮 7）：新增代理行为插桩字段（QI/方法计数 + 未知 IID/键捕获）。
+pub const PROTO_VERSION: u32 = 3;
 /// 节大小：一个 4 KiB 页（`SharedState` 必须可整装其中）。
 pub const SHARED_SIZE: usize = 4096;
 
@@ -99,6 +99,31 @@ pub struct SharedState {
     pub stores_wrapped: AtomicU32,
     /// GetValue(PKEY_AppUserModel_ID) 实际改写次数。
     pub aumid_served: AtomicU32,
+    // --- 代理行为插桩（修复轮 7：任务栏对委托对象的真实调用序列） ---
+    /// QI(IID_IPropertyStore) 命中次数（IUnknown 计入此桶）。
+    pub qi_store: AtomicU32,
+    /// QI(IID_IPropertyStoreCache) 命中次数。
+    pub qi_cache: AtomicU32,
+    /// QI 其他 IID 次数（转发给 inner 前计数；见 qi_last_iid）。
+    pub qi_other: AtomicU32,
+    /// 最后一个转发 IID 的原始 16 字节（内存布局；全 0 = 无）。
+    pub qi_last_iid: [u8; 16],
+    /// stub 收到非 IPropertyStore riid 的次数。
+    pub riid_other: AtomicU32,
+    /// 最后一个非 IPropertyStore riid 的原始 16 字节。
+    pub riid_last: [u8; 16],
+    /// 代理方法计数：GetCount / GetAt / GetValue(任意键) / SetValue / Commit。
+    pub m_getcount: AtomicU32,
+    pub m_getat: AtomicU32,
+    pub m_getvalue: AtomicU32,
+    pub m_setvalue: AtomicU32,
+    pub m_commit: AtomicU32,
+    /// GetValueAndState 次数（cache 接口读路径）。
+    pub m_getandstate: AtomicU32,
+    /// Release 次数（≈2 且其余全 0 = 任务栏立即丢弃存储）。
+    pub m_release: AtomicU32,
+    /// 最后一个非 AUMID 的 GetValue 键（fmtid 16B + pid 4B，内存布局）。
+    pub last_key: [u8; 20],
     /// 扫描的模块总数。
     pub modules_scanned: u32,
     /// 重定向的目标函数 IAT 槽总数（普通 + delay-load）。
@@ -133,6 +158,20 @@ impl SharedState {
             calls_seen: AtomicU32::new(0),
             stores_wrapped: AtomicU32::new(0),
             aumid_served: AtomicU32::new(0),
+            qi_store: AtomicU32::new(0),
+            qi_cache: AtomicU32::new(0),
+            qi_other: AtomicU32::new(0),
+            qi_last_iid: [0; 16],
+            riid_other: AtomicU32::new(0),
+            riid_last: [0; 16],
+            m_getcount: AtomicU32::new(0),
+            m_getat: AtomicU32::new(0),
+            m_getvalue: AtomicU32::new(0),
+            m_setvalue: AtomicU32::new(0),
+            m_commit: AtomicU32::new(0),
+            m_getandstate: AtomicU32::new(0),
+            m_release: AtomicU32::new(0),
+            last_key: [0; 20],
             modules_scanned: 0,
             slots_patched: 0,
             delay_slots: 0,

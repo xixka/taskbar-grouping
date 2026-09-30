@@ -177,6 +177,17 @@ unsafe extern "system" fn stub_get_store(
                 s.stores_wrapped.fetch_add(1, Ordering::Relaxed);
             }
         }
+    } else if hr.is_ok() && !riid.is_null() && *riid != IPropertyStore::IID {
+        // 修复轮 7 插桩：非 IPropertyStore 的 riid（调用方直接要别的接口）。
+        if let Some(s) = shared_ref() {
+            s.riid_other.fetch_add(1, Ordering::Relaxed);
+            let sp = s as *const SharedState as *mut SharedState;
+            std::ptr::copy_nonoverlapping(
+                riid as *const u8,
+                (*sp).riid_last.as_mut_ptr(),
+                16,
+            );
+        }
     }
     hr
 }

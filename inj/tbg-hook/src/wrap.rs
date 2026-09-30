@@ -174,18 +174,26 @@ unsafe extern "system" fn proxy_query_interface(
     if iid.is_null() || out.is_null() {
         return E_POINTER;
     }
+    let me = &*this;
     if *iid == IPropertyStore::IID || *iid == IUnknown::IID {
+        (*me.shared).qi_store.fetch_add(1, Ordering::Relaxed);
         proxy_add_ref(this);
         *out = this as *mut c_void;
         S_OK
-    } else if *iid == IPropertyStoreCache::IID && !(*this).inner_cache.is_null() {
-        // 仅当 inner 真实实现该接口（构造时 QI 探测成功）才宣告
+    } else if *iid == IPropertyStoreCache::IID && !me.inner_cache.is_null() {
+        (*me.shared).qi_cache.fetch_add(1, Ordering::Relaxed);
         proxy_add_ref(this);
         *out = this as *mut c_void;
         S_OK
     } else {
-        *out = ptr::null_mut();
-        E_NOINTERFACE
+        // 修复轮 7：未知 IID 不再一律 E_NOINTERFACE——转发给 inner 的 QI
+        //（能力类接口由 inner 直接应答，引用归调用方持有），同时计数并
+        // 捕获 IID 字节供诊断（qi_other / qi_last_iid）。
+        (*me.shared).qi_other.fetch_add(1, Ordering::Relaxed);
+        let sp = me.shared as *mut SharedState;
+        ptr::copy_nonoverlapping(iid as *const u8, (*sp).qi_last_iid.as_mut_ptr(), 16);
+        let vt = me.inner as *mut *const InnerVtbl;
+        ((*(*vt)).query_interface)(me.inner, iid, out)
     }
 }
 
@@ -196,6 +204,7 @@ unsafe extern "system" fn proxy_add_ref(this: *mut ProxyStore) -> u32 {
 
 unsafe extern "system" fn proxy_release(this: *mut ProxyStore) -> u32 {
     let me = &*this;
+    (*me.shared).m_release.fetch_add(1, Ordering::Relaxed);
     let left = me.refs.fetch_sub(1, Ordering::AcqRel);
     if left == 1 {
         // 释放 inner 的自有引用（store 与 cache 各一），再销毁自身
@@ -215,6 +224,7 @@ unsafe extern "system" fn proxy_release(this: *mut ProxyStore) -> u32 {
 /// GetCount 透传（raw 原型：this + out u32 → HRESULT）。
 unsafe extern "system" fn proxy_get_count(this: *mut ProxyStore, out: *mut u32) -> HRESULT {
     let me = &*this;
+    (*me.shared).m_getcount.fetch_add(1, Ordering::Relaxed);
     if out.is_null() {
         return E_POINTER;
     }
@@ -229,6 +239,7 @@ unsafe extern "system" fn proxy_get_at(
     pkey: *mut PROPERTYKEY,
 ) -> HRESULT {
     let me = &*this;
+    (*me.shared).m_getat.fetch_add(1, Ordering::Relaxed);
     if pkey.is_null() {
         return E_POINTER;
     }
@@ -242,8 +253,14 @@ unsafe extern "system" fn proxy_get_value(
     out: *mut PROPVARIANT,
 ) -> HRESULT {
     let me = &*this;
+    (*me.shared).m_getvalue.fetch_add(1, Ordering::Relaxed);
     if key.is_null() || out.is_null() {
         return E_POINTER;
+    }
+    if *key != PKEY_AppUserModel_ID {
+        // 诊断：捕获非 AUMID 键（fmtid16 + pid4，内存布局）
+        let sp = me.shared as *mut SharedState;
+        ptr::copy_nonoverlapping(key as *const u8, (*sp).last_key.as_mut_ptr(), 20);
     }
     let vt = me.inner as *mut *const InnerVtbl;
     let mut inner_pv = PROPVARIANT::new();
@@ -279,6 +296,7 @@ unsafe extern "system" fn proxy_set_value(
     val: *const PROPVARIANT,
 ) -> HRESULT {
     let me = &*this;
+    (*me.shared).m_setvalue.fetch_add(1, Ordering::Relaxed);
     if key.is_null() || val.is_null() {
         return E_POINTER;
     }
@@ -288,6 +306,7 @@ unsafe extern "system" fn proxy_set_value(
 
 unsafe extern "system" fn proxy_commit(this: *mut ProxyStore) -> HRESULT {
     let me = &*this;
+    (*me.shared).m_commit.fetch_add(1, Ordering::Relaxed);
     let vt = me.inner as *mut *const InnerVtbl;
     ((*(*vt)).commit)(me.inner)
 }
@@ -320,8 +339,13 @@ unsafe extern "system" fn proxy_get_value_and_state(
     pstate: *mut PSC_STATE,
 ) -> HRESULT {
     let me = &*this;
+    (*me.shared).m_getandstate.fetch_add(1, Ordering::Relaxed);
     if key.is_null() || ppropvar.is_null() || pstate.is_null() {
         return E_POINTER;
+    }
+    if *key != PKEY_AppUserModel_ID {
+        let sp = me.shared as *mut SharedState;
+        ptr::copy_nonoverlapping(key as *const u8, (*sp).last_key.as_mut_ptr(), 20);
     }
     if me.inner_cache.is_null() {
         return E_NOINTERFACE;
