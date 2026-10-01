@@ -112,12 +112,15 @@ Consequences on Windows 11: the hook installs and reports cleanly, native
 grouping is left undisturbed, but window grouping does **not** change while
 it is active. The CI asserts this stability property (doubling as a canary:
 if a future Windows routes the read through the documented call, the
-assertion flips and the limitation is lifted). Windows 10 behavior is
-covered by a dedicated classic-taskbar CI leg (`runtime-smoke-inj`,
-Windows Server 2022 runner, observation mode) which asserts the
-end-to-end effect there. For grouping changes on Windows 11
-today, use the default tbg-lite edition, whose external AUMID writes are
-consumed by the same internal pipeline and are verified end-to-end in CI.
+assertion flips and the limitation is lifted). The classic taskbar is
+covered by a dedicated CI leg (`runtime-smoke-inj`, Windows Server 2022
+runner): its first run showed the same structure there — the taskbar
+queries the store through the hook (calls/wrapped >= 1, TabList reads)
+but takes the grouping AUMID from the window-property atom fast path,
+so the limitation is structural, not Windows-11-specific. For grouping
+changes on Windows 11 today, use the default tbg-lite edition, whose
+external AUMID writes are consumed by the same internal pipeline and
+are verified end-to-end in CI.
 
 **Upgrading from a dev build earlier than 2026-10-01 (fix round 9).**
 Builds before that date issued an extra remote `LoadLibraryW` before the

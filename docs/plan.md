@@ -361,9 +361,9 @@ DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任
       双补：Win11 腿（runtime-smoke.ps1）stop 后断言 DLL 离开模块表
       + 二次 stop 必须报 not injected；新增经典任务栏腿
       `runtime-smoke-inj`（windows-2022，continue-on-error 观察模式）
-      ——路线 A 唯一可能端到端生效的环境（经典任务栏分组 AUMID 预期
-      仍走属性存储），断言 aumid-served≥1 / 注入后按钮分离 / 真实
-      卸载。
+      ——经典任务栏腿首轮实测（run 36805691251）即证伪"经典任务栏
+      或可端到端生效"假设：限制⑤扩展（见 §5），断言随证据改为
+      calls/wrapped≥1 + 稳定性 + aumid-served 金丝雀 + 真实卸载。
 - [x] **任务 37**：双版本文档补全——README 注入版章节（用法/风险/杀软
       预期/验真）、BENCHMARK 注入版行（CI 回填）、AGENTS 目录导览与构建
       命令同步、plan §3/§4 回填关闭。完成：本轮一并提交（README/AGENTS/
@@ -419,8 +419,20 @@ DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任
   本项目 §5 红线禁止。处置：注入版基础设施（注入/摘钩/共享节生命周期/
   重注入）端到端验证为绿；分组拦截在 Win11 定位为不可达，Phase INJ
   断言转为稳定性性质（钩子激活期间原生分组不受扰动）+ 证据日志，
-  兼作未来 Windows 若改走文档化调用时的金丝雀。Win10 表现未测
-  （CI 仅 Win11）。
+  兼作未来 Windows 若改走文档化调用时的金丝雀。
+  **扩展（2026-10-01，经典任务栏腿 run 36805691251）**：Server 2022
+  经典任务栏（Win10 式 shell）同样如此——calls=2/wrapped=2（确实经
+  钩子取存储）但代理只服务 `System.Taskbar.TabList` 读取、注入后
+  新开窗口 aumid-served 仍为 0。结论：限制⑤是**结构性**的（两代
+  任务栏一致），分组 AUMID 走窗口原子属性快速路径（GetPropW 原子，
+  PKEY 的底层存储），不经 COM 属性存储的 GetValue。若要路线 A 真正
+  达成分组改写，拦截面需扩展到 `user32!GetPropW`（explorer 内高频
+  热路径，风险显著上升）——属架构决策，留维护者裁决。经典腿 CI
+  断言同 Win11 腿改为稳定性 + 金丝雀；另记录：windows-2022 镜像
+  UIA 树不暴露任务栏按钮（计数断言降级为证据性，总按钮数样本已
+  入日志）。后续可选探针：注入状态下为窗口显式写 AUMID（tbg-lite
+  mark 一次性写入）再观察 aumid-served——判定显式 AUMID 窗口是否
+  走 COM 读（区分"无 AUMID 故不读"与"恒走原子路径"）。
 - v1 原文（符号链路架构、预算表、mod 拆解）仍存档于 git 历史 commit
   8e09b0e，仅供历史参考，**禁止实现引用**（GPL 红线）。
 

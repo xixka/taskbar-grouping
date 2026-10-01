@@ -1093,9 +1093,14 @@ try {
   Assert (Wait-HookDllGone 10) 'inj: tbg_hook.dll really left the explorer module list after stop (no leaked LoadLibraryW reference)'
   # And a follow-up stop must find nothing to clean: not-injected error is
   # the expected outcome and doubles as evidence the orphan self-heal probe
-  # sees an empty module list. (2>&1: the message is on stderr.)
-  $sp1b = (& $exeInj stop 2>&1 | Out-String)
-  Assert (($LASTEXITCODE -ne 0) -and ($sp1b -cmatch 'not injected')) 'inj: second stop reports "not injected" (no orphaned dll instance left behind)'
+  # sees an empty module list. (Start-Process + stderr redirect, NOT `2>&1`:
+  # this script runs with $ErrorActionPreference='Stop', where a 2>&1
+  # redirect turns the exe's stderr line into a terminating ErrorRecord --
+  # run 36805691251 phase INJ crashed exactly there.)
+  $errFile2 = Join-Path $out 'inj-second-stop.err.log'
+  $p1b = Start-Process -FilePath $exeInj -ArgumentList 'stop' -NoNewWindow -Wait -PassThru -RedirectStandardError $errFile2
+  $sp1b = [string](Get-Content $errFile2 -Raw -ErrorAction SilentlyContinue)
+  Assert (($p1b.ExitCode -ne 0) -and ($sp1b -cmatch 'not injected')) 'inj: second stop reports "not injected" (no orphaned dll instance left behind)'
   $st3 = & $exeInj status | Out-String
   Assert ($st3 -cmatch 'state\s*:\s*detached') 'inj: state detached after stop'
   Assert ($sp1 -match 'calls=\d+') 'inj: stop reports the final traffic counters'
