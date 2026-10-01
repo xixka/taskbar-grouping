@@ -276,13 +276,20 @@ pub unsafe extern "system" fn tbg_hook_init(_param: *mut c_void) -> u32 {
     INIT_OK
 }
 
-/// 关闭共享节句柄（stop / unload_self / DETACH 收尾；幂等）。
+/// 关闭共享节句柄并解除本实例的视图映射（stop / DETACH 收尾；幂等）。
+/// 修复轮 9：旧版只关句柄不解映射，explorer 每个注入/停止周期残留一个
+/// 无名节视图；现在 stop 后无任何残留（对象随最后一个视图/句柄消亡，
+/// 宿主侧句柄+视图在其进程退出时释放）。
 unsafe fn close_section_handle() {
     let h = SECTION_HANDLE.swap(0, Ordering::Relaxed);
     if h != 0 {
         let _ = windows::Win32::Foundation::CloseHandle(
             windows::Win32::Foundation::HANDLE(h as *mut c_void),
         );
+    }
+    let base = SHARED.swap(std::ptr::null_mut(), Ordering::AcqRel);
+    if !base.is_null() {
+        let _ = windows::Win32::System::Memory::UnmapViewOfFile(base as *const c_void);
     }
 }
 
@@ -297,30 +304,54 @@ unsafe fn unload_self(code: u32) -> u32 {
 }
 
 /// 宿主远程线程入口：摘钩 + 卸载（本函数不返回）。
+///
+/// 修复轮 9（2026-09-30 真机反馈）语义修正：**任何一次调用都以卸载本
+/// DLL 实例收尾**（`FreeLibraryAndExitThread` 原子"递减 + 线程退出"）。
+/// 旧版在 state 非 ACTIVE 时直接 return——配合旧版宿主"stop 也先发
+/// 一次远程 LoadLibraryW"的双重引用，DLL 会永久驻留 explorer（文件
+/// 锁死、"stop: ok" 假象）。现行分支：
+/// - `ACTIVE`：完整拆钩（停改写 → 摘 IAT → 宽限 1.5 s → 关句柄/解映射）
+///   → 卸载，退出码 `STOP_OK`；
+/// - `INITING` / `STOPPING`：并发 init/stop 拥有 teardown 所有权，本次
+///   不卸载直接返回 `STOP_NOT_ACTIVE`（避免双重递减把仍在睡眠的对方
+///   线程留在已解除映射的代码里）；
+/// - 其余（`UNLOADED` / `ERROR` / 无节视图）：残留实例，无补丁可摘，
+///   仅卸载自身，退出码 `STOP_NOT_ACTIVE`——宿主据此报告"清走残留
+///   实例"，旧版泄漏的 DLL 由此路径自愈。
 #[no_mangle]
 pub unsafe extern "system" fn tbg_hook_stop(_param: *mut c_void) -> u32 {
-    let s = match shared_ref() {
-        Some(s) => s,
-        None => return STOP_NOT_ACTIVE,
-    };
-    if s.state.load(Ordering::Acquire) != STATE_ACTIVE {
-        return STOP_NOT_ACTIVE;
+    let s = shared_ref();
+    if let Some(s) = s {
+        match s.state.load(Ordering::Acquire) {
+            STATE_ACTIVE => {
+                s.state.store(STATE_STOPPING, Ordering::Release);
+                // 先停改写再摘钩：在途 GetValue 快速回落原值。
+                s.enabled.store(0, Ordering::Release);
+                iat::remove();
+                s.state.store(STATE_UNLOADED, Ordering::Release);
+                // 宽限窗口：让可能位于本 DLL 代码内的在途调用返回（理论竞态，
+                // plan v2 §5 已知限制②；业界同类工具多以常驻规避，本版选择
+                // 完整卸载）。宽限后再关句柄/解映射。
+                Sleep(1500);
+                close_section_handle();
+                let hmod = HMODULE(SELF_MODULE.load(Ordering::Relaxed) as *mut c_void);
+                FreeLibraryAndExitThread(hmod, STOP_OK);
+            }
+            STATE_INITING | STATE_STOPPING => {
+                return STOP_NOT_ACTIVE;
+            }
+            _ => {
+                // 残留实例（UNLOADED/ERROR）：本实例无活动补丁（init 失败
+                // 路径已自行卸载，ACTIVE 路径走上面的完整拆钩）。
+                close_section_handle();
+                let hmod = HMODULE(SELF_MODULE.load(Ordering::Relaxed) as *mut c_void);
+                FreeLibraryAndExitThread(hmod, STOP_NOT_ACTIVE);
+            }
+        }
     }
-    s.state.store(STATE_STOPPING, Ordering::Release);
-    // 先停改写再摘钩：在途 GetValue 快速回落原值。
-    s.enabled.store(0, Ordering::Release);
-    iat::remove();
-    s.state.store(STATE_UNLOADED, Ordering::Release);
-    // 宽限窗口：让可能位于本 DLL 代码内的在途调用返回（理论竞态，
-    // plan v2 §5 已知限制②；业界同类工具多以常驻规避，本版选择完整卸载）。
-    Sleep(1500);
-    // 释放共享节句柄（对象随最后一个视图/句柄消亡；宿主 stop 进程自身
-    // 的句柄+视图在其退出时释放——名字与对象自此彻底回收）。
-    close_section_handle();
+    // 无节视图（init 从未完成映射）：纯乘客实例，直接卸载。
     let hmod = HMODULE(SELF_MODULE.load(Ordering::Relaxed) as *mut c_void);
-    // 单段 FreeLibraryAndExitThread：原子化"递减 + 线程退出"，对任意
-    // 计数安全（计数归零时卸载发生在本线程退出之后）。
-    FreeLibraryAndExitThread(hmod, STOP_OK);
+    FreeLibraryAndExitThread(hmod, STOP_NOT_ACTIVE);
     // FreeLibraryAndExitThread 不返回；显式收尾值仅为满足返回类型。
-    STOP_OK
+    STOP_NOT_ACTIVE
 }

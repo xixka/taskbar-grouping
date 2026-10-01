@@ -113,9 +113,23 @@ grouping is left undisturbed, but window grouping does **not** change while
 it is active. The CI asserts this stability property (doubling as a canary:
 if a future Windows routes the read through the documented call, the
 assertion flips and the limitation is lifted). Windows 10 behavior is
-untested (CI runs Windows 11 only). For grouping changes on Windows 11
+covered by a dedicated classic-taskbar CI leg (`runtime-smoke-inj`,
+Windows Server 2022 runner, observation mode) which asserts the
+end-to-end effect there. For grouping changes on Windows 11
 today, use the default tbg-lite edition, whose external AUMID writes are
 consumed by the same internal pipeline and are verified end-to-end in CI.
+
+**Upgrading from a dev build earlier than 2026-10-01 (fix round 9).**
+Builds before that date issued an extra remote `LoadLibraryW` before the
+stop export, so the DLL's reference count never reached zero: `stop`
+printed `stop: ok` but `tbg_hook.dll` stayed loaded in explorer (the file
+remained locked). The current build makes every `stop` end in a real
+unload (asserted against explorer's module list in CI) and adds an
+orphan-instance self-heal path. If an old instance is still resident, run
+`tbg-inject stop` once with the new build; if it reports the DLL cannot
+self-unload, restart explorer (`taskkill /f /im explorer.exe` then
+`start explorer`) or reboot once to clear it. Afterwards stop/unload
+works normally on every cycle.
 
 Edition boundaries:
 

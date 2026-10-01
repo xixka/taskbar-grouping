@@ -63,46 +63,57 @@ pub(crate) unsafe fn call_remote_export(
     )
     .map_err(|e| format!("inject: OpenProcess(explorer {pid}) failed: {e}"))?;
 
-    // 1) 远程 LoadLibraryW(dll 绝对路径)
     let path_w: Vec<u16> = dll
         .as_os_str()
         .to_string_lossy()
         .encode_utf16()
         .chain(std::iter::once(0))
         .collect();
-    let bytes = path_w.len() * 2;
-    // 0.58 签名：VirtualAllocEx 返回裸指针（失败为 null，非 Result）
-    let remote = VirtualAllocEx(h, None, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
-    if remote.is_null() {
-        return Err("inject: VirtualAllocEx failed (explorer memory)".into());
-    }
-    let mut written: usize = 0;
-    WriteProcessMemory(
-        h,
-        remote,
-        path_w.as_ptr() as *const c_void,
-        bytes,
-        Some(&mut written),
-    )
-    .map_err(|e| format!("inject: WriteProcessMemory failed: {e}"))?;
 
-    let k32 = GetModuleHandleW(w!("kernel32.dll"))
-        .map_err(|e| format!("inject: GetModuleHandleW(kernel32) failed: {e}"))?;
-    let load_lib = GetProcAddress(k32, s!("LoadLibraryW"))
-        .ok_or_else(|| "inject: resolve kernel32!LoadLibraryW failed".to_string())?;
-    let start: LPTHREAD_START_ROUTINE = Some(std::mem::transmute::<
-        unsafe extern "system" fn() -> isize,
-        unsafe extern "system" fn(*mut c_void) -> u32,
-    >(load_lib));
+    // 1) 装载（仅当 explorer 尚未持有 tbg_hook.dll 时）。
+    //    修复轮 9（2026-09-30 真机反馈）：旧版对每次导出调用（含 stop）
+    //    都先发一次远程 LoadLibraryW——stop 时引用计数先 +1，
+    //    tbg_hook_stop 内的 FreeLibraryAndExitThread 只 -1，DLL 永久驻留
+    //    explorer（文件锁死、"stop: ok" 假象）。已装载的实例必须复用，
+    //    绝不再叠加引用。
+    let base = match snapshot_remote_module(pid)? {
+        Some(existing) => existing,
+        None => {
+            let bytes = path_w.len() * 2;
+            // 0.58 签名：VirtualAllocEx 返回裸指针（失败为 null，非 Result）
+            let remote = VirtualAllocEx(h, None, bytes, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+            if remote.is_null() {
+                return Err("inject: VirtualAllocEx failed (explorer memory)".into());
+            }
+            let mut written: usize = 0;
+            WriteProcessMemory(
+                h,
+                remote,
+                path_w.as_ptr() as *const c_void,
+                bytes,
+                Some(&mut written),
+            )
+            .map_err(|e| format!("inject: WriteProcessMemory failed: {e}"))?;
 
-    let t = CreateRemoteThread(h, None, 0, start, Some(remote as *const c_void), 0, None)
-        .map_err(|e| format!("inject: CreateRemoteThread(LoadLibraryW) failed: {e}"))?;
-    let _ = WaitForSingleObject(t, 15_000);
-    let _ = CloseHandle(t);
-    let _ = VirtualFreeEx(h, remote, 0, MEM_RELEASE);
+            let k32 = GetModuleHandleW(w!("kernel32.dll"))
+                .map_err(|e| format!("inject: GetModuleHandleW(kernel32) failed: {e}"))?;
+            let load_lib = GetProcAddress(k32, s!("LoadLibraryW"))
+                .ok_or_else(|| "inject: resolve kernel32!LoadLibraryW failed".to_string())?;
+            let start: LPTHREAD_START_ROUTINE = Some(std::mem::transmute::<
+                unsafe extern "system" fn() -> isize,
+                unsafe extern "system" fn(*mut c_void) -> u32,
+            >(load_lib));
+
+            let t = CreateRemoteThread(h, None, 0, start, Some(remote as *const c_void), 0, None)
+                .map_err(|e| format!("inject: CreateRemoteThread(LoadLibraryW) failed: {e}"))?;
+            let _ = WaitForSingleObject(t, 15_000);
+            let _ = CloseHandle(t);
+            let _ = VirtualFreeEx(h, remote, 0, MEM_RELEASE);
+            wait_remote_module(pid)?
+        }
+    };
 
     // 2) 远程基址 + 本地 RVA → 远程函数地址
-    let base = wait_remote_module(pid)?;
     let local = LoadLibraryW(PCWSTR::from_raw(path_w.as_ptr()))
         .map_err(|e| format!("inject: local LoadLibraryW({}) failed: {e}", dll.display()))?;
     let mut name_buf = export.to_vec();
@@ -132,37 +143,49 @@ pub(crate) unsafe fn call_remote_export(
     Ok(code)
 }
 
+/// 单次 Toolhelp 快照：`tbg_hook.dll` 在目标进程的装载基址（不存在则
+/// `None`）。既用于装载前探测（避免对已装载实例重复 LoadLibraryW——
+/// 修复轮 9 的双重引用根因），也用于 stop 的残留实例自愈判定。
+unsafe fn snapshot_remote_module(pid: u32) -> Result<Option<usize>, String> {
+    let snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, pid)
+        .map_err(|e| format!("inject: snapshot(explorer modules) failed: {e}"))?;
+    let mut me = MODULEENTRY32W {
+        dwSize: std::mem::size_of::<MODULEENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let mut found: Option<usize> = None;
+    if Module32FirstW(snap, &mut me).is_ok() {
+        loop {
+            let name = String::from_utf16_lossy(
+                &me.szModule[..me
+                    .szModule
+                    .iter()
+                    .position(|&u| u == 0)
+                    .unwrap_or(me.szModule.len())],
+            );
+            if name.eq_ignore_ascii_case("tbg_hook.dll") {
+                found = Some(me.modBaseAddr as usize);
+                break;
+            }
+            if Module32NextW(snap, &mut me).is_err() {
+                break;
+            }
+        }
+    }
+    let _ = CloseHandle(snap);
+    Ok(found)
+}
+
+/// 目标进程当前是否装载着 `tbg_hook.dll`（宿主 stop 的残留实例判定）。
+pub(crate) unsafe fn remote_module_loaded(pid: u32) -> bool {
+    snapshot_remote_module(pid).map(|o| o.is_some()).unwrap_or(false)
+}
+
 /// 轮询 explorer 模块表定位 `tbg_hook.dll` 基址（≤2 s）。
 unsafe fn wait_remote_module(pid: u32) -> Result<usize, String> {
     for _ in 0..20 {
-        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, pid)
-            .map_err(|e| format!("inject: snapshot(explorer modules) failed: {e}"))?;
-        let mut me = MODULEENTRY32W {
-            dwSize: std::mem::size_of::<MODULEENTRY32W>() as u32,
-            ..Default::default()
-        };
-        let mut found = 0usize;
-        if Module32FirstW(snap, &mut me).is_ok() {
-            loop {
-                let name = String::from_utf16_lossy(
-                    &me.szModule[..me
-                        .szModule
-                        .iter()
-                        .position(|&u| u == 0)
-                        .unwrap_or(me.szModule.len())],
-                );
-                if name.eq_ignore_ascii_case("tbg_hook.dll") {
-                    found = me.modBaseAddr as usize;
-                    break;
-                }
-                if Module32NextW(snap, &mut me).is_err() {
-                    break;
-                }
-            }
-        }
-        let _ = CloseHandle(snap);
-        if found != 0 {
-            return Ok(found);
+        if let Some(base) = snapshot_remote_module(pid)? {
+            return Ok(base);
         }
         windows::Win32::System::Threading::Sleep(100);
     }

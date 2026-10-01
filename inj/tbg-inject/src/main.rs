@@ -18,7 +18,7 @@ use std::path::PathBuf;
 
 use tbg_proto::{
     SharedState, INIT_ALREADY, INIT_OK, MODE_GROUP, MODE_UNGROUP, STATE_ACTIVE, STATE_UNLOADED,
-    STOP_OK,
+    STOP_NOT_ACTIVE, STOP_OK,
 };
 
 fn main() {
@@ -243,14 +243,54 @@ pub(crate) fn do_stop() -> Result<String, String> {
         let view = sharedmem::SharedView::ensure()?;
         let s = view.as_mut();
         let state = s.state.load(std::sync::atomic::Ordering::Acquire);
+        let pid_now = injector::explorer_pid();
         if state != STATE_ACTIVE {
+            // 修复轮 9（真机反馈）：state 非 ACTIVE ≠ explorer 里没有 DLL。
+            // 旧版宿主的双重 LoadLibraryW（stop 也先装载一次）会在
+            // explorer 里留下引用计数 ≥1 的残留实例——钩子已摘、DLL
+            // 却驻留（文件锁死）。探测到残留就调用远程 stop 清走它：
+            // tbg_hook_stop 对非 ACTIVE 实例也以卸载收尾（退出码
+            // STOP_NOT_ACTIVE）。用户的现有 explorer 由新二进制自愈，
+            // 无需重启 shell。
+            if let Some(pid) = pid_now {
+                if injector::remote_module_loaded(pid) {
+                    let dll = dll_path()?;
+                    let code = injector::call_remote_export(pid, &dll, b"tbg_hook_stop\0")?;
+                    // 验证卸载真实完成（FreeLibraryAndExitThread 在远程线程
+                    // 退出前完成解除映射，宿主等待返回后首查即应消失）：
+                    // 修复轮 9 的旧版 DLL（stop 对非 ACTIVE 直接 return）
+                    // 不会自卸载，必须如实区分"已清走"与"需重启 explorer"。
+                    let mut gone = false;
+                    for _ in 0..10 {
+                        if !injector::remote_module_loaded(pid) {
+                            gone = true;
+                            break;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(400));
+                    }
+                    return match (code, gone) {
+                        (STOP_OK, _) => Ok(format!(
+                            "stop: ok — stale state torn down, dll unloaded (state was {})",
+                            s.state_name()
+                        )),
+                        (STOP_NOT_ACTIVE, true) => Ok(
+                            "stop: ok — orphaned tbg_hook.dll unloaded from explorer (no active hook; state: ".to_string()
+                                + s.state_name()
+                                + ")",
+                        ),
+                        (STOP_NOT_ACTIVE, false) => Err(
+                            "stop: tbg_hook.dll is still loaded in explorer — it is a pre-fix instance whose stop path cannot self-unload; restart explorer (or reboot) once to clear it, then use this build".to_string()
+                        ),
+                        (other, _) => Err(format!("stop: hook stop returned {other}")),
+                    };
+                }
+            }
             return Err(format!(
                 "stop: not injected (state: {})",
                 s.state_name()
             ));
         }
         let pid = s.explorer_pid.load(std::sync::atomic::Ordering::Relaxed);
-        let pid_now = injector::explorer_pid();
         if pid_now != Some(pid) {
             // explorer 已重启：DLL 随旧进程消亡，只需复位状态
             s.state.store(STATE_UNLOADED, std::sync::atomic::Ordering::Release);

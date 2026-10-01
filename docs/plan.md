@@ -347,6 +347,23 @@ DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任
       共享节句柄（名字随句柄释放而非随对象死亡）、GPA 层常开、
       IPropertyStoreCache 代理扩展、proto v3 代理行为插桩、早期注入
       决定性实验。
+      **修复轮 9（2026-09-30 真机反馈，DLL 无法卸载）**：旧版宿主
+      `call_remote_export` 对每次导出调用（含 stop）都先发一次远程
+      `LoadLibraryW`——stop 时引用计数先 +1、`FreeLibraryAndExitThread`
+      只 -1，DLL 永久驻留 explorer（文件锁死、"stop: ok" 假象）；CI 旧
+      断言只查退出码不查模块表，故漏网。三处修复：① 装载条件化（快照
+      探测已装载实例即复用，绝不叠加引用）；② `tbg_hook_stop` 语义
+      重写（任何调用都以 FreeLibraryAndExitThread 收尾：ACTIVE=完整
+      拆钩 / 残留实例=仅卸载自愈 / INITING+STOPPING=并发保护），并补
+      旧版缺失的节视图 UnmapViewOfFile（每周期漏一个无名视图）；③
+      宿主 do_stop 残留实例自愈路径 + 卸载真实性验证（轮询模块表，
+      旧版 DLL 无法自卸载时如实报错并指引重启 explorer）。CI 盲区
+      双补：Win11 腿（runtime-smoke.ps1）stop 后断言 DLL 离开模块表
+      + 二次 stop 必须报 not injected；新增经典任务栏腿
+      `runtime-smoke-inj`（windows-2022，continue-on-error 观察模式）
+      ——路线 A 唯一可能端到端生效的环境（经典任务栏分组 AUMID 预期
+      仍走属性存储），断言 aumid-served≥1 / 注入后按钮分离 / 真实
+      卸载。
 - [x] **任务 37**：双版本文档补全——README 注入版章节（用法/风险/杀软
       预期/验真）、BENCHMARK 注入版行（CI 回填）、AGENTS 目录导览与构建
       命令同步、plan §3/§4 回填关闭。完成：本轮一并提交（README/AGENTS/

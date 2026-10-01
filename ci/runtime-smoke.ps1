@@ -228,6 +228,37 @@ foreach ($b in $btns) { $n = $b.Current.Name; if ($n) { Write-Output $n } }
   }
 }
 
+function Test-HookDllLoaded {
+  # Fix round 9 regression guard (real-machine feedback 2026-09-30): the old
+  # injector issued a remote LoadLibraryW before EVERY export call -- stop
+  # included -- so the DLL's reference count went 1 -> 2 and the teardown's
+  # single FreeLibraryAndExitThread left it loaded in explorer forever
+  # ("stop: ok" was a lie; the file stayed locked). Asserting module-list
+  # membership is the only honest way to catch that class of bug.
+  try {
+    $procs = @(Get-Process -Name explorer -ErrorAction SilentlyContinue)
+    foreach ($p in $procs) {
+      try {
+        foreach ($m in $p.Modules) {
+          if ($m.ModuleName -ieq 'tbg_hook.dll') { return $true }
+        }
+      } catch { }
+    }
+  } catch { }
+  return $false
+}
+
+function Wait-HookDllGone([int]$seconds) {
+  # FreeLibraryAndExitThread unmaps before the remote thread exits, and the
+  # host waits on that thread -- but allow an async margin anyway.
+  $deadline = (Get-Date).AddSeconds($seconds)
+  while ((Get-Date) -lt $deadline) {
+    if (-not (Test-HookDllLoaded)) { return $true }
+    Start-Sleep -Milliseconds 500
+  }
+  return (-not (Test-HookDllLoaded))
+}
+
 function Restart-ExplorerShell {
   # Kill explorer so the shell re-reads the taskbar pinned folder (task 18)
   # and the taskbar is rebuilt from scratch (task 20 relies on the same
@@ -1048,11 +1079,23 @@ try {
   }
   $a1 = Get-WindowAumid $live[0].Hwnd
   Assert ($a1 -notmatch '~TBG~w') 'inj: real window AUMID still untouched while injected (read-path rewrite only)'
+  Assert (Test-HookDllLoaded) 'inj: tbg_hook.dll present in explorer module list while injected (enumeration sanity for the unload guard)'
   Shot 'inj-ungrouped-taskbar.png'
 
   # --- stop: unhook + unload + counters ---
   $sp1 = & $exeInj stop | Out-String
   Assert (($LASTEXITCODE -eq 0) -and ($sp1 -cmatch 'stop: ok')) 'inj: stop exits 0 with "stop: ok"'
+  # Fix round 9 regression guard: the unload must be REAL. The old injector
+  # loaded the DLL an extra time before calling the stop export, so the
+  # teardown's single FreeLibraryAndExitThread left refcount 1 behind and
+  # the DLL never left explorer (file locked). "stop: ok" alone proved
+  # nothing -- assert the module list.
+  Assert (Wait-HookDllGone 10) 'inj: tbg_hook.dll really left the explorer module list after stop (no leaked LoadLibraryW reference)'
+  # And a follow-up stop must find nothing to clean: not-injected error is
+  # the expected outcome and doubles as evidence the orphan self-heal probe
+  # sees an empty module list. (2>&1: the message is on stderr.)
+  $sp1b = (& $exeInj stop 2>&1 | Out-String)
+  Assert (($LASTEXITCODE -ne 0) -and ($sp1b -cmatch 'not injected')) 'inj: second stop reports "not injected" (no orphaned dll instance left behind)'
   $st3 = & $exeInj status | Out-String
   Assert ($st3 -cmatch 'state\s*:\s*detached') 'inj: state detached after stop'
   Assert ($sp1 -match 'calls=\d+') 'inj: stop reports the final traffic counters'
@@ -1109,6 +1152,7 @@ try {
   Start-Sleep -Seconds 2
   $sp2 = & $exeInj stop | Out-String
   Assert (($LASTEXITCODE -eq 0) -and ($sp2 -cmatch 'stop: ok')) 'inj: stop after re-inject exits 0'
+  Assert (Wait-HookDllGone 10) 'inj: tbg_hook.dll left the fresh explorer after the final stop (early-injection instance unloads cleanly too)'
 
   # --- event log evidence (task 36 round 4, diagnostics only) ---
   # Event 1000 = application crash with the faulting module name; this tells
