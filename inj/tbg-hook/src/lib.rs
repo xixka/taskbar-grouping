@@ -32,7 +32,9 @@ use windows::Win32::Foundation::{BOOL, E_POINTER, FARPROC, HINSTANCE, HMODULE, H
 use windows::Win32::System::LibraryLoader::{
     DisableThreadLibraryCalls, FreeLibraryAndExitThread,
 };
-use windows::Win32::System::Memory::{MapViewOfFile, OpenFileMappingW, FILE_MAP_READ, FILE_MAP_WRITE};
+use windows::Win32::System::Memory::{
+    MapViewOfFile, OpenFileMappingW, FILE_MAP_READ, FILE_MAP_WRITE, MEMORY_MAPPED_VIEW_ADDRESS,
+};
 use windows::Win32::System::Threading::{GetCurrentProcessId, Sleep};
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
 use windows::core::GUID;
@@ -289,7 +291,10 @@ unsafe fn close_section_handle() {
     }
     let base = SHARED.swap(std::ptr::null_mut(), Ordering::AcqRel);
     if !base.is_null() {
-        let _ = windows::Win32::System::Memory::UnmapViewOfFile(base as *const c_void);
+        // 0.58 签名：UnmapViewOfFile 收 MEMORY_MAPPED_VIEW_ADDRESS 结构体。
+        let _ = windows::Win32::System::Memory::UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS {
+            Value: base.cast::<c_void>(),
+        });
     }
 }
 
