@@ -1,6 +1,8 @@
 # tbg-lite
 
-Taskbar grouping controller for Windows 10/11, written in Rust — in **two
+Taskbar grouping controller for Windows 11 (support scope per the
+2026-10-01 maintainer decision — Windows 10 users are served by other
+established tools), written in Rust — in **two
 editions** (task 33–37, plan v2 §0-6):
 
 - **tbg-lite** (main edition, zero-injection): controls taskbar button
@@ -112,12 +114,14 @@ Consequences on Windows 11: the hook installs and reports cleanly, native
 grouping is left undisturbed, but window grouping does **not** change while
 it is active. The CI asserts this stability property (doubling as a canary:
 if a future Windows routes the read through the documented call, the
-assertion flips and the limitation is lifted). The classic taskbar is
-covered by a dedicated CI leg (`runtime-smoke-inj`, Windows Server 2022
-runner): its first run showed the same structure there — the taskbar
-queries the store through the hook (calls/wrapped >= 1, TabList reads)
-but takes the grouping AUMID from the window-property atom fast path,
-so the limitation is structural, not Windows-11-specific. For grouping
+assertion flips and the limitation is lifted). The classic (Windows 10
+style) taskbar was tested once on a Server 2022 runner and showed the same
+structure — the taskbar queries the store through the hook (calls/wrapped
+>= 1, TabList reads) but takes the grouping AUMID from the window-property
+atom fast path — so the limitation is structural, not Windows-11-specific.
+Per the 2026-10-01 scope decision the project targets Windows 11 only;
+that classic-taskbar CI leg has been retired (the script is kept in
+ci/runtime-smoke-inj.ps1 for reproduction). For grouping
 changes on Windows 11 today, use the default tbg-lite edition, whose
 external AUMID writes are consumed by the same internal pipeline and
 are verified end-to-end in CI.

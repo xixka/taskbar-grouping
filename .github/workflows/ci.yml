@@ -101,36 +101,11 @@ jobs:
           path: ci/out
           if-no-files-found: warn
 
-  # 任务 36 后续（2026-09-30 真机反馈 + 修复轮 9）：注入版经典任务栏腿
-  # （windows-2022 = Server 2022，Win10 式经典任务栏）。这是路线 A 唯一
-  # 可能端到端生效的环境：Win11 任务栏的分组 AUMID 读取不经文档化调用
-  # （已知限制⑤），经典任务栏预期仍经属性存储查询。本 job 断言
-  # 注入/分组/摘钩/真实卸载（模块表消失，修复轮 9 回归守卫）。
-  # 首轮 continue-on-error（观察模式）：经典任务栏行为未经 CI 验证过，
-  # 先采证再决定是否升级为门禁。
-  runtime-smoke-inj:
-    runs-on: windows-2022
-    continue-on-error: true
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (audit SEC-02: pinned)
-
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (audit SEC-02: pinned)
-
-      - name: Build (release, locked)
-        run: cargo build --release --locked --workspace
-
-      - name: Injection smoke (classic taskbar leg)
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File ci/runtime-smoke-inj.ps1
-
-      - name: Upload injection artifacts (logs + screenshots)
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2 (audit SEC-02: pinned)
-        with:
-          name: runtime-smoke-inj-artifacts
-          path: ci/out
-          if-no-files-found: warn
+  # 经典任务栏腿（runtime-smoke-inj，windows-2022）已按维护者 2026-10-01
+  # 范围指令移除：本项目仅支持 Win11，Win10 用户有其他成熟工具。该腿
+  # 首轮运行（run 36805691251）已完成历史使命——证伪"经典任务栏可经
+  # 属性存储改写分组"假设（限制⑤为结构性，见 docs/plan.md §5）。
+  # 脚本 ci/runtime-smoke-inj.ps1 留档供复现实验，不再接入 CI。
 
   # 任务 21（SEC-04）：发布物生成——tag push（v*）触发。四 job 全绿才轮到
   # 本 job（needs 全部）。产物：tbg-lite-<tag>-x86_64-windows.zip +
