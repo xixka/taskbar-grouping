@@ -22,6 +22,12 @@ jobs:
         with:
           toolchain: 1.99.0
 
+      # §0-9：rust-cache 构建缓存（v2.9.2 钉 SHA，SEC-02 口径）：此前每次
+      # 推送各编译 job 独立冷编依赖树（单次约 2-4 分钟 ×5）；缓存命中后
+      # 增量构建秒级完成，门禁语义不变（各 job 仍从源码独立构建）
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (audit SEC-02: pinned)
+
       # 任务 22b（审计 SEC-03）：Cargo.lock 已入库，--locked 保证可复现构建
       - name: Build (release, locked)
         run: cargo build --release --locked --workspace
@@ -68,6 +74,12 @@ jobs:
         with:
           toolchain: 1.99.0
 
+      # §0-9：rust-cache 构建缓存（v2.9.2 钉 SHA，SEC-02 口径）：此前每次
+      # 推送各编译 job 独立冷编依赖树（单次约 2-4 分钟 ×5）；缓存命中后
+      # 增量构建秒级完成，门禁语义不变（各 job 仍从源码独立构建）
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (audit SEC-02: pinned)
+
       - name: Build (release, locked)
         run: cargo build --release --locked --workspace
 
@@ -98,6 +110,12 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # audit SEC-02: pinned
         with:
           toolchain: 1.99.0
+
+      # §0-9：rust-cache 构建缓存（v2.9.2 钉 SHA，SEC-02 口径）：此前每次
+      # 推送各编译 job 独立冷编依赖树（单次约 2-4 分钟 ×5）；缓存命中后
+      # 增量构建秒级完成，门禁语义不变（各 job 仍从源码独立构建）
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (audit SEC-02: pinned)
 
       - name: Build (release, locked)
         run: cargo build --release --locked --workspace
@@ -141,6 +159,12 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # audit SEC-02: pinned
         with:
           toolchain: 1.99.0
+
+      # §0-9：rust-cache 构建缓存（v2.9.2 钉 SHA，SEC-02 口径）：此前每次
+      # 推送各编译 job 独立冷编依赖树（单次约 2-4 分钟 ×5）；缓存命中后
+      # 增量构建秒级完成，门禁语义不变（各 job 仍从源码独立构建）
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (audit SEC-02: pinned)
 
       - name: Build (release, locked)
         run: cargo build --release --locked --workspace
@@ -203,6 +227,12 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # audit SEC-02: pinned
         with:
           toolchain: 1.99.0
+
+      # §0-9：rust-cache 构建缓存（v2.9.2 钉 SHA，SEC-02 口径）：此前每次
+      # 推送各编译 job 独立冷编依赖树（单次约 2-4 分钟 ×5）；缓存命中后
+      # 增量构建秒级完成，门禁语义不变（各 job 仍从源码独立构建）
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (audit SEC-02: pinned)
 
       - name: Build (release, locked)
         run: cargo build --release --locked --workspace
