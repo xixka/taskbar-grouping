@@ -1,7 +1,0 @@
-[package]
-name = "tbg-proto"
-version = "0.1.0"
-edition = "2021"
-description = "Route A shared-memory protocol between tbg-inject host and tbg_hook.dll (plan v2 SS5, task 34)"
-license = "MIT"
-publish = false

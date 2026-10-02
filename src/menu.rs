@@ -329,12 +329,13 @@ impl L10n {
         }
     }
 
-    /// 任务 30：注入路线菜单入口（信息 + 协同引导，**不含任何注入代码**——
-    /// plan v2 §5 红线：路线 A 备用不实现）。注入路线的实操载体是
-    /// Windhawk（成熟注入平台）+ 其 taskbar-grouping mod：mod 在 explorer
-    /// 内部挂钩任务栏自身分组逻辑，天然覆盖 shell 自管回写的 Explorer
-    /// 文件夹窗口。给出本机 Windhawk 安装检测 + 冲突规则（README
-    /// Coexistence 同口径）+ 操作步骤。
+    /// 任务 30：注入路线菜单入口（信息 + 协同引导，**不含任何注入代码**）。
+    /// §0-8（2026-10-02）：注入版（tbg-inject，路线 A）已删除——Win11 任务栏
+    /// 分组 AUMID 读取不经文档化属性存储（限制⑤），注入版无可见效果。
+    /// 注入路线的实操载体是 Windhawk（成熟注入平台）+ 其 taskbar-grouping
+    /// mod：mod 在 explorer 内部挂钩任务栏自身分组逻辑，天然覆盖 shell
+    /// 自管回写的 Explorer 文件夹窗口。给出本机 Windhawk 安装检测 +
+    /// 冲突规则（README Coexistence 同口径）+ 操作步骤。
     fn injection_route_info(&self, watch_running: bool) -> String {
         // Windhawk 安装检测（常见两处安装位置；存在 windhawk.exe 即视为
         // 已安装——纯文件系统探测，无注入、无新依赖）
@@ -367,13 +368,14 @@ impl L10n {
             Lang::En => format!(
                 concat!(
                     "menu: injection route (route A) — info\n",
-                    "  tbg-lite itself never injects (plan v2 §5: route A stays the archived\n",
-                    "  backup; injection = symbol hooks inside explorer with per-build\n",
-                    "  maintenance, AV-false-positive and GPL risks). The practical injection\n",
-                    "  route today is Windhawk (https://windhawk.net) + its taskbar-grouping\n",
-                    "  mod, which hooks the taskbar itself — this also covers Explorer\n",
-                    "  folder windows natively (the non-injection route can only re-assert,\n",
-                    "  see task 28).\n",
+                    "  tbg-lite itself never injects. Route A was shipped 2026-09-28 as a\n",
+                    "  separate tbg-inject edition and removed 2026-10-02 (plan v2 SS0-8):\n",
+                    "  on Windows 11 the taskbar never reads the grouping AUMID through\n",
+                    "  the documented property store, so the hook changed nothing. The\n",
+                    "  practical injection route today is Windhawk (https://windhawk.net)\n",
+                    "  + its taskbar-grouping mod, which hooks the taskbar itself — this\n",
+                    "  also covers Explorer folder windows natively (the non-injection\n",
+                    "  route can only re-assert, see task 28).\n",
                     "  Windhawk: {wh_line}\n"
                 ),
                 wh_line = wh_line
@@ -381,9 +383,10 @@ impl L10n {
             Lang::Zh => format!(
                 concat!(
                     "menu：注入路线（路线 A）——说明\n",
-                    "  tbg-lite 本体不做注入（plan v2 §5：路线 A 为存档备用——注入需在\n",
-                    "  explorer 内挂符号钩子，逐版本维护、杀软误报与 GPL 风险）。当前\n",
-                    "  可实操的注入路线是 Windhawk（https://windhawk.net）+ 其\n",
+                    "  tbg-lite 本体不做注入。路线 A 曾于 2026-09-28 以独立注入版\n",
+                    "  （tbg-inject）落地，2026-10-02 删除（plan v2 §0-8）：Win11 任务栏\n",
+                    "  的分组 AUMID 读取不经文档化属性存储调用，钩子改不动分组（限制⑤）。\n",
+                    "  当前可实操的注入路线是 Windhawk（https://windhawk.net）+ 其\n",
                     "  taskbar-grouping mod：mod 直接在任务栏内部挂钩分组逻辑，天然\n",
                     "  覆盖 shell 自管回写的 Explorer 文件夹窗口（非注入路线只能\n",
                     "  检测+补写，见任务 28）。\n",

@@ -7,19 +7,19 @@ API（`SHGetPropertyStoreForWindow` + `PKEY_AppUserModel_ID`）改写运行中�
 归属，不注入任何进程。实现路线与任务拆分见 `docs/plan.md`（v2，§2 路线 /
 §3 任务清单）。
 
-**双版本并行（2026-09-28 维护者决策，plan v2 §0-6/任务 33）**：在零注入主版本
-（`tbg-lite.exe`，`src/` 主包）之外，新增注入版独立产物
-（`tbg-inject.exe` + `tbg_hook.dll`，`inj/` 工作区成员）——路线 A 清室复刻：
-IAT 重定向 `shell32!SHGetPropertyStoreForWindow` + COM 委托属性存储，
-零私有符号、零 Windhawk 引用（GPL 红线，plan v2 §5/§6-1）。两版本互斥
-运行（同一任务栏二选一）；注入版无自启、无还原表（摘钩即回原状）。
-**Win11 分组限制（已知限制⑤，2026-09-30 任务 36 实测）**：Win11 任务栏
-的分组 AUMID 读取不经该文档化调用（代理插桩仅观察到
-`System.Taskbar.TabList` 读；早期注入实验排除指针缓存）——注入版基础
-设施端到端为绿但分组拦截在 Win11 不可达，Phase INJ 以稳定性断言 +
-证据日志 documenting（详见 plan v2 §5 已知限制⑤与 README 注入版章节）；
-Win10 未测。Win11 上改分组请用主版本（外部写入已被同一内部管线消费，
-Phase L 全绿）。
+**注入版已删除（2026-10-02 维护者决策，plan v2 §0-8）**：2026-09-28 曾按
+决策 6 双版本并行（主版 tbg-lite + 注入版 tbg-inject，`inj/` 三工作区
+成员，IAT 重定向 `shell32!SHGetPropertyStoreForWindow` + COM 委托的清室
+复刻），2026-10-02 整体删除——Win11 任务栏的分组 AUMID 读取不经文档化
+属性存储调用（已知限制⑤，Win11 与经典任务栏两代实测结构性一致，
+plan v2 §5 证据链），注入版基础设施端到端为绿但对用户零可见效果；
+维护者目标（Windhawk 同类效果 + 低内存）经核实已由主版达成（用户应用
+覆盖 7/7、竞态 0%、工作集 ~1.5 MB）。删除范围：`inj/` 代码、
+`[workspace]` 节、CI Phase INJ 腿（27 断言，金丝雀随之退役）、
+release/dev-release 双 zip 与独立 attestation、README 注入版章节、
+BENCHMARK §6 实测表。代码与脚本可从 git 历史恢复；技术结论（限制⑤、
+清室架构、卸载语义）留档 plan v2 §5。Win11 上改分组用主版本（外部
+写入已被同一内部管线消费，Phase L 全绿）。
 
 **双线路并行开发（2026-09-22 维护者决策）**：两条策略线路同时开工、同等维护，
 通过 CLI 参数切换（任务 8 已实现：`watch --strategy ungroup|group`）——
@@ -38,9 +38,9 @@ Phase 0b（任务 5-10）已验收：runtime-smoke + phase0b-acceptance 断言�
 33 项（含交互菜单 Phase M），任务 19 起扩至 47 项（含自启 Phase I），
 任务 16 起扩至 59 项（含 pin Phase P），任务 17 起扩至 72 项（含
 固定/取消固定 Phase T），任务 18 起扩至 86 项（含磁贴联动 Phase L），任务 20 起扩至 104 项
-（含常驻加固 Phase X：环形日志/explorer 重启重扫/熔断），任务 36 起扩至
-131 项（含注入版 Phase INJ 端到端 27 断言：注入/状态/摘钩/复原/重注入/
-早期注入决定性实验——分组断言为已知限制⑤稳定性口径）。
+（含常驻加固 Phase X：环形日志/explorer 重启重扫/熔断），任务 36 起曾扩至
+131 项（含注入版 Phase INJ 端到端 27 断言）——2026-10-02 §0-8 删除注入版
+后回到 104 项（Phase INJ 随注入版移除，决策记录在案）。
 
 **固定磁贴（任务 16/17/18，Phase 2）**：`pin` 命令为线路二分组生成带共享
 AUMID `TBG.Group.<NAME>` 的 `.lnk`（`src/shortcut.rs`，mklnkwaumid
@@ -70,21 +70,20 @@ Ctrl+C console control handler 与 `--restore-on-exit` 方案作废
 严格校验、NAMECHANGE 重评估、inspect --json、restore --dry-run、
 actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI 门禁。
 详见 docs/plan.md v2 Phase R。
-据此：非注入 B+ 为主要路线（2026-09-28 决策 6 起注入版 A 以独立产物并行，
-见"项目定位"与 plan v2 §0-6/§5——注入代码仅存在于 `inj/` 成员）；
+据此：非注入 B+ 为唯一路线（2026-09-28 决策 6 起注入版 A 曾以独立产物
+并行，2026-10-02 §0-8 删除——见"项目定位"与 plan v2 §0-6/§0-8/§5）；
 默认行为 = Disable grouping on the taskbar，无排除列表；后续任务一律
 按 plan v2 §3 任务清单立项。
 
 ## 构建 / 测试 / lint 命令
 
-- `cargo build --release --workspace` —— 唯一经验证的构建命令（任务 34 起
-  `--workspace`：根包 tbg-lite + `inj/` 三成员 tbg-proto / tbg-hook /
-  tbg-inject）；提取自 `.github/workflows/ci.yml`，已由 CI 实际运行通过
-  （windows-latest）。本仓库验收门禁 = 该命令在 CI 绿灯。注入版产物：
-  `inj/tbg-hook` 编译为 `tbg_hook.dll`（cdylib，[lib] name 指定），
-  `inj/tbg-inject` 编译为 `tbg-inject.exe`（bin）。
+- `cargo build --release --workspace` —— 唯一经验证的构建命令；提取自
+  `.github/workflows/ci.yml`，已由 CI 实际运行通过（windows-latest）。
+  本仓库验收门禁 = 该命令在 CI 绿灯。§0-8（2026-10-02）注入版删除后
+  `[workspace]` 节已移除，仓库为单包 tbg-lite，`--workspace` 语义收敛为
+  本包（命令本身保持不变）。
 - `ci/runtime-smoke.ps1` —— CI 运行时冒烟（任务 9 + 13 + 14 + 19 + 16 + 17
-  + 18 + 20 + 36，
+  + 18 + 20，
   `runtime-smoke` job）：在 windows-latest 真实会话拉起 notepad 窗口，断言
   双线路 AUMID 改写/复原、任务 13 启动扫存量（Phase 0 线路一 / Phase B
   线路二预开窗口断言）、任务 14 交互菜单（Phase M 双会话：stdin 预写驱动，
@@ -131,8 +130,8 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   退出，取代 Ctrl+C）、复用 cmd_inspect/cmd_restore、stdin EOF 优雅退出；
   任务 29：文案双语（en/zh，GetUserDefaultUILanguage 自动检测 + L 键
   切换，仅菜单层——watch/inspect/restore 技术输出保持英文）；任务 30：
-  `[6]` 注入路线入口（信息 + Windhawk 协同引导，零注入代码，§5 红线
-  不破）；任务 31：`[0]` 退出 `k` 选项保活（先停后启分离重启
+  `[6]` 注入路线入口（信息 + Windhawk 协同引导，零注入代码；§0-8
+  注入版已删除，`[6]` 文案同步改写并保留 Windhawk 指引）；任务 31：`[0]` 退出 `k` 选项保活（先停后启分离重启
   `watch --duration 0`，stdio 显式导向 tbg-background.log）
 - `src/appid.rs` —— AUMID 读写核心（属性存储 API）；线路一/线路二标记
   （`~TBG~w` 后缀 / `TBG.Group.` 共享前缀）
@@ -204,14 +203,16 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
    
 ## 硬约束（红线）
 
-- 注入路线代码边界（2026-09-28 决策 6 改写，原"禁止一切注入路线代码"作废）：
-  注入实现**仅允许存在于 `inj/` 工作区成员**（tbg-proto / tbg-hook / tbg-inject），
-  技术形态限定为本版选型（`CreateRemoteThread` 注入 + IAT 重定向 + COM 委托）；
-  `src/` 主包（tbg-lite）保持零注入；`SetWindowsHookEx` 跨进程注入、inline hook、
-  内存补丁、私有符号/偏移解析仍禁（无清室实现依据）；注入实现禁止引用
-  Windhawk mod 代码或 v1 符号表（GPL 清室红线，plan v2 §6-1）；
-  注入版不提供自启注册，仅用户显式启动。
+- 注入路线代码边界（2026-10-02 决策 8 改写，原决策 6"仅允许存在于
+  `inj/` 工作区成员"条款随注入版删除作废）：**注入路线代码禁止存在于
+  本仓库**——仓库为纯 tbg-lite 单包，`src/` 主包保持零注入；
+  `SetWindowsHookEx` 跨进程注入、inline hook、内存补丁、私有符号/偏移
+  解析仍禁（无清室实现依据）；禁止引用 Windhawk mod 代码或 v1 符号表
+  （GPL 清室红线，plan v2 §6-1）；若未来重启路线 A，须先按 plan v2 §5
+  技术结论重新立项（git 历史中的 inj/ 实现为复用基准）。
 - 禁止弱化或删除 CI 步骤 / 验证断言；验证失败只能修复，最多 3 轮。
+  （§0-8 例外在案：2026-10-02 注入版 Phase INJ 27 断言随注入版整体删除，
+  属维护者决策而非弱化；主版门禁不得引用此例。）
 - 禁止本地编译或本地运行 cargo。
 - 禁止提交机密（令牌、密钥、私有配置）。
 - 直推 master；禁止 force push，回滚一律 `git revert`。
@@ -227,20 +228,18 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 
 ## 条件路由
 
-- 改注入版（`inj/` 成员）→ 读 `inj/tbg-hook/src/lib.rs`（DllMain 纪律 +
-  导出入口 + IAT 桩）、`inj/tbg-hook/src/iat.rs`（PE 导入表扫描，布局由
-  单元测试钉死）、`inj/tbg-hook/src/wrap.rs`（COM 委托，vtable 次序对照
-  windows 0.58 生成源码）、`inj/tbg-inject/src/injector.rs`（远程三段式）；
-  改共享协议 → 读 `inj/tbg-proto/src/lib.rs`（两侧同源编译，布局即契约）
+- ~~改注入版（`inj/` 成员）~~ → §0-8（2026-10-02）注入版已删除：`inj/`
+  三成员（tbg-proto / tbg-hook / tbg-inject）随 `[workspace]` 节移除，
+  需要时以 git 历史为复用基准（技术结论见 plan v2 §5）
 - 改 CI 或构建命令 → 先读 `.github/workflows/ci.yml`
 - 改依赖或 release profile → 读 `Cargo.toml`；体积/内存口径参考
   docs/phase0b-acceptance.md §4（v1 §6 预算表已随 v1 存档于 git 历史）
 - 改产物元数据（版本资源/应用清单）→ 读 `build.rs`（任务 32；winresource
   走 build-dependencies，`Cargo.toml` 与 `Cargo.lock` 必须同笔提交）
 - 实现新功能 → 在 docs/plan.md v2 §3 任务清单找到对应任务号，按任务号实现
-  并单独提交；注入版（`inj/`）已随任务 34-37 落地（Win11 分组限制见
-  plan v2 §5 已知限制⑤），后续注入相关改动维持零私有符号/零 Windhawk
-  引用红线（若需参考 mod 行为须先重评 GPL，plan v2 §6-1）
+  并单独提交；注入版（`inj/`）曾随任务 34-37 落地、2026-10-02 按 §0-8
+  删除（Win11 分组限制见 plan v2 §5 已知限制⑤）——仓库内已无注入代码，
+  重启须重新立项（红线见上）
 - 改双线路行为 → 读 src/winevent.rs（apply_ungroup / apply_group）与
   src/appid.rs（标记定义），确认互斥标记与 restore 双路径不被破坏
 - 改本文件 → 增量合并，不覆盖既有规则

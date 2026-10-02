@@ -136,30 +136,19 @@ jobs:
           $tag = "${env:GITHUB_REF_NAME}"
           $zip = "tbg-lite-$tag-x86_64-windows.zip"
           Compress-Archive -Path target\release\tbg-lite.exe -DestinationPath $zip -Force
-          # 任务 36（决策 6）：注入版独立 zip（exe + tbg_hook.dll 同包）
-          $zipInj = "tbg-inject-$tag-x86_64-windows.zip"
-          Compress-Archive -Path target\release\tbg-inject.exe, target\release\tbg_hook.dll -DestinationPath $zipInj -Force
-          $lines = @()
-          foreach ($z in @($zip, $zipInj)) {
-            $sha = (Get-FileHash -Algorithm SHA256 $z).Hash
-            $size = (Get-Item $z).Length
-            $lines += "$sha  $z"
-            Write-Host "packaged $z ($size bytes) sha256=$sha"
-          }
-          $lines | Set-Content SHA256SUMS.txt -Encoding ascii
-          "size_bytes=$((Get-Item $zip).Length)" | Set-Content size.txt -Encoding ascii
+          # §0-8（2026-10-02）：注入版 zip（tbg-inject + tbg_hook.dll）随注入
+          # 版删除一并移除；本步回到单 zip 发布。
+          $sha = (Get-FileHash -Algorithm SHA256 $zip).Hash
+          $size = (Get-Item $zip).Length
+          "$sha  $zip" | Set-Content SHA256SUMS.txt -Encoding ascii
+          "size_bytes=$size" | Set-Content size.txt -Encoding ascii
+          Write-Host "packaged $zip ($size bytes) sha256=$sha"
 
       - name: Attest build provenance (SEC-04)
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2 (pinned)
         with:
           # 证明对象：发布 zip（v4 要求显式指定 subject）
           subject-path: tbg-lite-${{ github.ref_name }}-x86_64-windows.zip
-
-      - name: Attest build provenance (SEC-04, injection edition)
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2 (pinned)
-        with:
-          # 任务 36：注入版 zip 单独出具证明（独立信任面）
-          subject-path: tbg-inject-${{ github.ref_name }}-x86_64-windows.zip
 
       - name: Create GitHub Release
         shell: powershell
@@ -169,9 +158,8 @@ jobs:
           $tag = "${env:GITHUB_REF_NAME}"
           $sums = Get-Content SHA256SUMS.txt
           $liteLine = ($sums | Where-Object { $_ -like '*tbg-lite-*' } | Select-Object -First 1)
-          $injLine = ($sums | Where-Object { $_ -like '*tbg-inject-*' } | Select-Object -First 1)
-          $notes = "tbg-lite $tag`n`nEditions (task 36, plan v2 SS0-6):`n- Non-injection (main): tbg-lite-$tag-x86_64-windows.zip`n  $liteLine`n- Injection (route A): tbg-inject-$tag-x86_64-windows.zip (tbg-inject.exe + tbg_hook.dll)`n  $injLine`n  Expect AV heuristics to flag the injection edition (real injection behavior).`n`nVerification: build provenance attested for both zips (see release attestations); verify locally with 'gh attestation verify <zip> --repo $env:GITHUB_REPOSITORY'.`n`nMSRV: stable toolchain. Built with cargo build --release --locked --workspace from tag $tag."
-          gh release create $tag --title "tbg-lite $tag" --notes $notes tbg-lite-$tag-x86_64-windows.zip tbg-inject-$tag-x86_64-windows.zip SHA256SUMS.txt
+          $notes = "tbg-lite $tag`n`nZero-injection edition (the separate injection edition shipped 2026-09-28~2026-10-02 was removed per plan v2 SS0-8: on Windows 11 the taskbar never reads the grouping AUMID through the documented property store, so it could not change grouping).`n`nArtifact: tbg-lite-$tag-x86_64-windows.zip`n  $liteLine`n`nVerification: build provenance attested for the zip (see release attestations); verify locally with 'gh attestation verify <zip> --repo $env:GITHUB_REPOSITORY'.`n`nMSRV: stable toolchain. Built with cargo build --release --locked --workspace from tag $tag."
+          gh release create $tag --title "tbg-lite $tag" --notes $notes tbg-lite-$tag-x86_64-windows.zip SHA256SUMS.txt
 
   # 任务 27（维护者 2026-09-23 指令）：dev 滚动发布通道。分支推送 → 四 job
   # 门禁全绿 → 覆盖式发布 prerelease `dev`（tag 滚动指向当次 commit）。
@@ -206,29 +194,17 @@ jobs:
         run: |
           $zip = "tbg-lite-dev-x86_64-windows.zip"
           Compress-Archive -Path target\release\tbg-lite.exe -DestinationPath $zip -Force
-          # 任务 36（决策 6）：注入版独立 zip（exe + tbg_hook.dll 同包）
-          $zipInj = "tbg-inject-dev-x86_64-windows.zip"
-          Compress-Archive -Path target\release\tbg-inject.exe, target\release\tbg_hook.dll -DestinationPath $zipInj -Force
-          $lines = @()
-          foreach ($z in @($zip, $zipInj)) {
-            $sha = (Get-FileHash -Algorithm SHA256 $z).Hash
-            $size = (Get-Item $z).Length
-            $lines += "$sha  $z"
-            Write-Host "packaged $z ($size bytes) sha256=$sha"
-          }
-          $lines | Set-Content SHA256SUMS.txt -Encoding ascii
+          # §0-8（2026-10-02）：注入版 dev zip 随注入版删除移除，回到单 zip。
+          $sha = (Get-FileHash -Algorithm SHA256 $zip).Hash
+          $size = (Get-Item $zip).Length
+          "$sha  $zip" | Set-Content SHA256SUMS.txt -Encoding ascii
+          Write-Host "packaged $zip ($size bytes) sha256=$sha"
 
       - name: Attest build provenance (SEC-04)
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2 (pinned)
         with:
           # 证明对象：dev zip（与正式通道同口径，SmartScreen 误报可验源）
           subject-path: tbg-lite-dev-x86_64-windows.zip
-
-      - name: Attest build provenance (SEC-04, injection edition)
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2 (pinned)
-        with:
-          # 任务 36：注入版 zip 单独出具证明（独立信任面）
-          subject-path: tbg-inject-dev-x86_64-windows.zip
 
       # 滚动回收：gh release delete 连同 tag 一并清理（--cleanup-tag）；
       # git push --delete 兜底"tag 残留而 release 已不在"的边角形态
@@ -255,5 +231,4 @@ jobs:
           fail_on_unmatched_files: true
           files: |
             tbg-lite-dev-x86_64-windows.zip
-            tbg-inject-dev-x86_64-windows.zip
             SHA256SUMS.txt

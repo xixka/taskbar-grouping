@@ -32,25 +32,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tbg-hook"
-version = "0.1.0"
-dependencies = [
- "tbg-proto",
- "windows",
- "winresource",
-]
-
-[[package]]
-name = "tbg-inject"
-version = "0.1.0"
-dependencies = [
- "tbg-proto",
- "windows",
- "windows-version",
- "winresource",
-]
-
-[[package]]
 name = "tbg-lite"
 version = "0.1.0"
 dependencies = [
@@ -58,10 +39,6 @@ dependencies = [
  "windows-version",
  "winresource",
 ]
-
-[[package]]
-name = "tbg-proto"
-version = "0.1.0"
 
 [[package]]
 name = "unicode-ident"

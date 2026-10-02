@@ -2,23 +2,22 @@
 
 Taskbar grouping controller for Windows 11 (support scope per the
 2026-10-01 maintainer decision — Windows 10 users are served by other
-established tools), written in Rust — in **two
-editions** (task 33–37, plan v2 §0-6):
+established tools), written in Rust. tbg-lite is **zero-injection**: it
+controls taskbar button grouping by rewriting each window's
+`PKEY_AppUserModel_ID` through the documented Shell property-store API
+(`SHGetPropertyStoreForWindow`) — no DLL injection, no shell patching, no
+admin rights. Single exe, ~1.5 MB private working set.
 
-- **tbg-lite** (main edition, zero-injection): controls taskbar button
-  grouping by rewriting each window's `PKEY_AppUserModel_ID` through the
-  documented Shell property-store API (`SHGetPropertyStoreForWindow`) — no
-  DLL injection, no shell patching, no admin rights. Single exe, ~1.5 MB
-  private working set.
-- **tbg-inject** (injection edition, route A): a separate `tbg-inject.exe` +
-  `tbg_hook.dll` pair that redirects the same API **inside** explorer via an
-  IAT slot patch and a delegating `IPropertyStore`, so the taskbar reads the
-  rewritten AUMID in-process while the windows' real properties are never
-  touched (no restore table needed — unhook and native grouping returns).
-  See "The injection edition" below for usage and its distinct risk profile.
+> **History note (2026-10-02).** A separate injection edition
+> (`tbg-inject.exe` + `tbg_hook.dll`, route A) shipped between 2026-09-28
+> and 2026-10-02 and was then removed (plan v2 §0-8): on Windows 11 the
+> taskbar never reads the grouping AUMID through the documented
+> property-store call (known limitation 5, measured on CI and on a classic
+> taskbar), so the in-process hook could not change grouping — zero
+> user-visible effect. Its code and technical findings stay in git history
+> and old release downloads; see `docs/plan.md` §5.
 
-Both editions share the two strategy lines (`watch --strategy` for tbg-lite,
-`inject --strategy` for tbg-inject):
+The two strategy lines (`watch --strategy`):
 
 - `ungroup` (default) — per-window suffix `~TBG~w<HWND>`; enabling the watch
   ungroups everything on the taskbar, including windows that already existed
@@ -28,19 +27,18 @@ Both editions share the two strategy lines (`watch --strategy` for tbg-lite,
   (atomic writes, single-instance mutex) for `restore`.
 
 > **Windows 11 only.** OS builds below 22000 — every Windows 10 release —
-> are not supported or tested; use an established tool there instead. Both
-> exes print a one-line warning to stderr when launched on an out-of-scope
-> build and then run on as before (warn-only: no blocking, no exit-code
+> are not supported or tested; use an established tool there instead. The
+> exe prints a one-line warning to stderr when launched on an out-of-scope
+> build and then runs on as before (warn-only: no blocking, no exit-code
 > change). The check reads the real OS build via `RtlGetVersion`
-> (`src/oscheck.rs` / `inj/tbg-inject/src/oscheck.rs`), so it is unaffected
+> (`src/oscheck.rs`), so it is unaffected
 > by compatibility-mode manifests.
 
 ## Installation
 
 - **Stable**: [latest release](https://github.com/xixka/taskbar-grouping/releases/latest)
-  (`v*` tags; two zips — `tbg-lite-<tag>-x86_64-windows.zip` single exe,
-  `tbg-inject-<tag>-x86_64-windows.zip` exe + `tbg_hook.dll` — each with
-  `SHA256SUMS.txt` and its own build-provenance attestation).
+  (`v*` tags; `tbg-lite-<tag>-x86_64-windows.zip` single exe, with
+  `SHA256SUMS.txt` and a build-provenance attestation).
 - **Dev channel**: the rolling [`dev` prerelease](https://github.com/xixka/taskbar-grouping/releases/tag/dev) —
   rebuilt from the latest push that passed the full CI suite (see
   "Evidence & verification" below); same artifact format, prerelease
@@ -86,100 +84,34 @@ is graceful (hooks removed, stats printed).
   re-marked automatically; if the process exits abnormally 3 times in a row,
   the circuit breaker removes the autostart entry to prevent a boot loop.
 
-## The injection edition (tbg-inject)
+## Removed: the injection edition (2026-10-02)
 
-`tbg-inject.exe` + `tbg_hook.dll` (keep the DLL next to the exe) implement
-route A with a clean-room design (plan v2 §5): no private symbols, no
-inline hooks, no memory code patches.
+The former `tbg-inject.exe` + `tbg_hook.dll` pair (route A, shipped
+2026-09-28) has been removed. Its clean-room interception was verified
+working at the API level, but on Windows 11 the taskbar resolves the
+grouping AUMID through internal WinRT/CTaskBand paths and never through
+the documented property-store call (known limitation 5, measured on CI
+2026-09-30 and confirmed structural on a classic taskbar) — so grouping
+never changed while it was active. With the maintainer's goal ("the
+Windhawk mod's effect without Windhawk's memory cost") fully served by
+tbg-lite (user-app coverage 7/7, 0% race, ~1.5 MB working set), the
+edition was deleted rather than shipped as a no-effect canary
+(decision log: `docs/plan.md` §0-8; technical findings: §5).
 
-```
-tbg-inject                              (no arguments: interactive menu)
-tbg-inject inject [--strategy ungroup|group] [--group <NAME>]
-tbg-inject stop                         (unhook + unload + final counters)
-tbg-inject status                       (hook state, patched modules, traffic)
-```
+Practical notes for past users:
 
-How it works — the host locates explorer, loads the DLL into it with
-`CreateRemoteThread + LoadLibraryW`, then calls its `tbg_hook_init` export
-remotely. The DLL walks explorer's module import tables and redirects every
-static import of `shell32!SHGetPropertyStoreForWindow` (plus its
-`GetProcAddress`-resolved and delay-load call sites) to a stub; the stub
-calls the original and wraps the returned `IPropertyStore` (including the
-`IPropertyStoreCache` view) in a delegating object that rewrites only
-`PKEY_AppUserModel_ID` reads (line-1 per-window suffix / line-2 shared
-AUMID, same markers as tbg-lite). Everything else — `GetCount`, `GetAt`,
-`SetValue`, `Commit`, other keys — passes through untouched.
-
-**Windows 11 grouping limitation (known limitation 5, measured on CI
-2026-09-30).** The interception above is verified working at the API level
-— the taskbar queries the wrapped stores — but on Windows 11 it reads only
-`System.Taskbar.TabList` through them and resolves the grouping AUMID via
-internal WinRT/CTaskBand paths instead (confirmed by full proxy
-instrumentation and by an early-injection experiment on a fresh shell; the
-community taskbar-grouping mod achieves the effect only by hooking
-Taskbar.dll private symbols, which this project's clean-room rules forbid).
-Consequences on Windows 11: the hook installs and reports cleanly, native
-grouping is left undisturbed, but window grouping does **not** change while
-it is active. The CI asserts this stability property (doubling as a canary:
-if a future Windows routes the read through the documented call, the
-assertion flips and the limitation is lifted). The classic (Windows 10
-style) taskbar was tested once on a Server 2022 runner and showed the same
-structure — the taskbar queries the store through the hook (calls/wrapped
->= 1, TabList reads) but takes the grouping AUMID from the window-property
-atom fast path — so the limitation is structural, not Windows-11-specific.
-Per the 2026-10-01 scope decision the project targets Windows 11 only;
-that classic-taskbar CI leg has been retired and its script removed
-(recoverable from git history if ever needed). For grouping
-changes on Windows 11 today, use the default tbg-lite edition, whose
-external AUMID writes are consumed by the same internal pipeline and
-are verified end-to-end in CI.
-
-**Upgrading from a dev build earlier than 2026-10-01 (fix round 9).**
-Builds before that date issued an extra remote `LoadLibraryW` before the
-stop export, so the DLL's reference count never reached zero: `stop`
-printed `stop: ok` but `tbg_hook.dll` stayed loaded in explorer (the file
-remained locked). The current build makes every `stop` end in a real
-unload (asserted against explorer's module list in CI) and adds an
-orphan-instance self-heal path. If an old instance is still resident, run
-`tbg-inject stop` once with the new build; if it reports the DLL cannot
-self-unload, restart explorer (`taskkill /f /im explorer.exe` then
-`start explorer`) or reboot once to clear it. Afterwards stop/unload
-works normally on every cycle.
-
-Edition boundaries:
-
-- **No autostart, no restore table.** Injection is an explicit, deliberate
-  action; because real properties are never written, unhooking is the whole
-  "restore".
-- **Mutually exclusive with `tbg-lite watch`** — one taskbar, one edition.
-  Stop one before starting the other.
-- **No icon/jumplist translation** — this edition intercepts AUMID reads,
-  not the rest of the property surface.
-- If explorer restarts, the hook dies with it: the shared section's
-  lifetime is tied to its mappings, so a later `tbg-inject status` sees a
-  fresh detached section and a fresh `inject` re-attaches to the new
-  explorer.
-
-Risk profile (expect it, plan for it):
-
-- **Antivirus products will likely flag this edition.** Injecting a DLL into
-  explorer is a real injection technique, not a heuristic artifact — engines
-  are right to score it. The release carries the same
-  SHA256SUMS + build-provenance attestation so you can verify the binary
-  you run is the one built from this repository; if your engine blocks it,
-  that is the product working as designed. Only run it if you accept
-  running injection-based tools at all.
-- The DLL runs inside explorer: a bug there can take the shell down (CI
-  gates the pair end-to-end, but that risk is inherent to the route).
-- Unloading has a theoretical in-flight-call window (1.5 s grace period
-  before `FreeLibraryAndExitThread`; documented in plan v2 §5).
+- **Nothing to uninstall** — the injection edition never registered an
+  autostart and never wrote restore-table entries.
+- If a pre-2026-10-01 build left `tbg_hook.dll` resident in explorer
+  (the round-9 bug: `stop: ok` but the file stayed locked), clear it
+  once: restart explorer (`taskkill /f /im explorer.exe` then
+  `start explorer`) or reboot.
+- Old zips remain downloadable from past releases for reference only.
 
 ## Coexistence with Windhawk
 
 tbg-lite never injects into explorer, so it can run alongside Windhawk and its
-mods. (The injection edition is the exception: `tbg-inject` occupies the same
-in-process territory as Windhawk mods — do not run them against the same
-mechanism.) Two things to keep in mind:
+mods. Two things to keep in mind:
 
 - The `taskbar-grouping` Windhawk mod implements the same feature via symbol
   hooks **inside** explorer; running both simultaneously would fight over the
@@ -198,18 +130,15 @@ mechanism.) Two things to keep in mind:
 - Measured size / memory / stress numbers: [`BENCHMARK.md`](BENCHMARK.md)
 - CI (windows-latest, a real interactive Windows session — per the maintainer
   its runs count as real-machine runs): `cargo build --release --locked
-  --workspace` (both editions) + 60+ unit tests + a 131-assertion runtime
+  --workspace` + 60+ unit tests + a 104-assertion runtime
   smoke (dual-line AUMID rewrites and restores, startup sweep, interactive
   menu, HKCU-Run autostart, `.lnk` tile pin/unpin with the taskbarpin verb,
   tile↔live-window linkage via UIA, explorer-restart re-sweep, ring log,
-  circuit breaker, plus the injection-edition Phase INJ end-to-end:
-  artifacts, CLI codes, menu, patched-IAT interception with real AUMIDs
-  untouched and native grouping undisturbed (known limitation 5, see
-  below), interception counters with per-method proxy instrumentation,
-  unhook restore, explorer-restart re-inject, and an early-injection
-  decisive experiment) and a 30+ assertion acceptance suite (50-window
+  circuit breaker) and a 30+ assertion acceptance suite (50-window
   stress per line, <10 MB memory gate, multi-app coverage, UIA
-  taskbar-button dumps).
+  taskbar-button dumps). The former injection-edition Phase INJ
+  (27 assertions) was removed together with the edition on 2026-10-02
+  (plan v2 §0-8).
 
 ## Antivirus false positives
 
@@ -257,8 +186,9 @@ not planned for now, so verify-and-report is the supported path.
 - Chromium-family browsers self-manage their AUMID; short-horizon rewrites
   hold, long-horizon behavior is hardware/browser-update dependent (the
   re-assert pass catches most of these too).
-- No icon/jumplist "translation layer" (that is injection-route capability);
-  suffix-marked windows may show generic jump lists.
+- No icon/jumplist "translation layer" (that would require an injection
+  route, removed 2026-10-02); suffix-marked windows may show generic jump
+  lists.
 - New-window race: a button may briefly appear in its native group before the
   rewrite lands (sub-millisecond writes in practice; 0 missed in 50-window
   stress).

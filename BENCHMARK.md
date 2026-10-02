@@ -56,17 +56,10 @@ Windows PowerShell 控制台 / regedit / Edge 短时）；已知限制：Explore
 | 异常熔断 | 连续 3 次短命异常退出 → 自动注销自启 | 同上 |
 | 环形日志 | 256 KiB 上限，超限截半 | 同上（X1 门禁） |
 
-## 6. 注入版（任务 36/37，tbg-inject + tbg_hook.dll）
+## 6. 注入版（已删除，2026-10-02）
 
-> 口径同上（CI windows-latest 真实会话，release 构建）。行为面：
-> 注入版在 Win11 的分组拦截不可达（已知限制⑤，plan v2 §5），下表为
-> 基础设施实测；尺寸行由 dev/release 工作流自动上报回填。
-
-| 指标 | 实测 | 来源 |
-|---|---|---|
-| 拦截面（explorer 全模块） | 扫描 246 模块 / 静态 IAT 5 槽 / GPA 213 槽 / 命名导入 54,601 | run 36653273590（status 面板） |
-| 钩子交付 | 任务栏经钩子取得代理存储（calls=2 / wrapped=2），每存储读一次 `System.Taskbar.TabList` 后 Release | 同上（proto v3 插桩） |
-| 分组效果（Win11） | 不变（已知限制⑤；断言为稳定性口径 + 金丝雀） | run 36654985869（早期注入决定性实验） |
-| 摘钩复原 | stop 后原生分组即回（补丁 LIFO 恢复 + DLL 卸载） | runtime-smoke Phase INJ（门禁） |
-| explorer 重启 | 钩子随 shell 消亡；status 见全新 detached 节；再 inject 重挂载 | 同上（门禁） |
-| 发布 zip 尺寸 | tbg-inject-dev-x86_64-windows.zip：**146,264 字节（143 KB）**（exe + dll 同包，run 36658504730）；tbg-lite-dev zip：189,438 字节（同 run） | dev-release 工作流（SHA256SUMS + attestation） |
+> 注入版（tbg-inject + tbg_hook.dll，任务 36/37）按维护者决策删除
+> （plan v2 §0-8）：Win11 分组拦截不可达（限制⑤，两代任务栏结构性一致），
+> 注入版对用户零可见效果。原节实测数据（拦截面扫描 246 模块 / IAT 5 槽、
+> 钩子交付 calls/wrapped、摘钩复原、explorer 重启重挂载、dev zip 143 KB）
+> 存档于 git 历史；技术结论留档 docs/plan.md §5。

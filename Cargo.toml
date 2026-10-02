@@ -46,8 +46,7 @@ codegen-units = 1
 strip = true
 panic = "abort"
 
-# 任务 34（决策 6，plan v2 §0-6）：注入版工作区成员。
-# 根包 tbg-lite 保持零注入（AGENTS.md 红线）；注入实现仅存在于 inj/ 下。
-# profile 上表工作区全成员生效（hook dll / inject exe 同样走体积导向）。
-[workspace]
-members = ["inj/tbg-proto", "inj/tbg-hook", "inj/tbg-inject"]
+# §0-8（2026-10-02，维护者指令）：注入版删除——原 inj/ 三工作区成员
+# （tbg-proto / tbg-hook / tbg-inject）与 [workspace] 节一并移除，仓库回到
+# 单包 tbg-lite（根包独立成包，CI 的 --workspace 语义随之收敛为本包）。
+# 删除理由与技术结论见 docs/plan.md §0-8 / §5；代码可从 git 历史恢复。
