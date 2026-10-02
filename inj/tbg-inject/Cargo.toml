@@ -19,6 +19,9 @@ windows = { version = "0.58", features = [
     "Win32_Globalization",                # 菜单语言自动检测（任务 29 同源）
 ] }
 
+# §0-7（2026-10-01）：启动时 Win11-only 提示（oscheck.rs，同主版）
+windows-version = "0.1"
+
 # 任务 32 同款资源配方（AV 误报治理；注入版同样携带可核验身份）
 [build-dependencies]
 winresource = { version = "0.1", default-features = false }

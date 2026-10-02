@@ -27,6 +27,14 @@ Both editions share the two strategy lines (`watch --strategy` for tbg-lite,
   grouping; originals are persisted to `%LOCALAPPDATA%\tbg-lite\tbg-restore.tsv`
   (atomic writes, single-instance mutex) for `restore`.
 
+> **Windows 11 only.** OS builds below 22000 — every Windows 10 release —
+> are not supported or tested; use an established tool there instead. Both
+> exes print a one-line warning to stderr when launched on an out-of-scope
+> build and then run on as before (warn-only: no blocking, no exit-code
+> change). The check reads the real OS build via `RtlGetVersion`
+> (`src/oscheck.rs` / `inj/tbg-inject/src/oscheck.rs`), so it is unaffected
+> by compatibility-mode manifests.
+
 ## Installation
 
 - **Stable**: [latest release](https://github.com/xixka/taskbar-grouping/releases/latest)
@@ -120,8 +128,8 @@ structure — the taskbar queries the store through the hook (calls/wrapped
 >= 1, TabList reads) but takes the grouping AUMID from the window-property
 atom fast path — so the limitation is structural, not Windows-11-specific.
 Per the 2026-10-01 scope decision the project targets Windows 11 only;
-that classic-taskbar CI leg has been retired (the script is kept in
-ci/runtime-smoke-inj.ps1 for reproduction). For grouping
+that classic-taskbar CI leg has been retired and its script removed
+(recoverable from git history if ever needed). For grouping
 changes on Windows 11 today, use the default tbg-lite edition, whose
 external AUMID writes are consumed by the same internal pipeline and
 are verified end-to-end in CI.

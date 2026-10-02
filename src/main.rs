@@ -21,6 +21,7 @@ mod appid;
 mod autostart;
 mod health;
 mod menu;
+mod oscheck;
 mod restoremap;
 mod ringlog;
 mod shortcut;
@@ -35,6 +36,7 @@ use windows::Win32::Foundation::HWND;
 
 const HELP: &str = "\
 tbg-lite — zero-injection Windows taskbar grouping controller
+(Windows 11 only: builds below 22000 are not supported or tested)
 
 USAGE:
     tbg-lite                              (no arguments: interactive menu)
@@ -163,6 +165,9 @@ fn main() -> ExitCode {
         eprintln!("tbg-lite: internal error: {msg}");
         std::process::exit(101);
     }));
+    // §0-7（2026-10-01）：仅支持 Win11——低 build 打 stderr 警告，
+    // 不阻断、不改退出码（详见 src/oscheck.rs 模块注释）。
+    oscheck::win11_only_notice();
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         // 任务 14（2026-09-22 维护者指示）：无参数启动 → 交互菜单

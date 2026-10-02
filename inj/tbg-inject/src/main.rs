@@ -12,6 +12,7 @@
 
 mod injector;
 mod menu;
+mod oscheck;
 mod sharedmem;
 
 use std::path::PathBuf;
@@ -26,6 +27,9 @@ fn main() {
 }
 
 fn real_main() -> i32 {
+    // §0-7（2026-10-01）：仅支持 Win11——低 build 打 stderr 警告，
+    // 不阻断、不改退出码（详见 oscheck.rs 模块注释）。
+    oscheck::win11_only_notice();
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() {
         return menu::run();
@@ -53,6 +57,7 @@ fn real_main() -> i32 {
 fn print_help() {
     println!(
         "tbg-inject {} — taskbar grouping controller (injection edition, route A)
+(Windows 11 only: builds below 22000 are not supported or tested)
 
 USAGE:
     tbg-inject                          interactive menu

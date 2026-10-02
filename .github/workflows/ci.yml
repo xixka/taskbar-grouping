@@ -105,7 +105,7 @@ jobs:
   # 范围指令移除：本项目仅支持 Win11，Win10 用户有其他成熟工具。该腿
   # 首轮运行（run 36805691251）已完成历史使命——证伪"经典任务栏可经
   # 属性存储改写分组"假设（限制⑤为结构性，见 docs/plan.md §5）。
-  # 脚本 ci/runtime-smoke-inj.ps1 留档供复现实验，不再接入 CI。
+  # 脚本 ci/runtime-smoke-inj.ps1 亦随后删除（git 历史可溯）。
 
   # 任务 21（SEC-04）：发布物生成——tag push（v*）触发。四 job 全绿才轮到
   # 本 job（needs 全部）。产物：tbg-lite-<tag>-x86_64-windows.zip +

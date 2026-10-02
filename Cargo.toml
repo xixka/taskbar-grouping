@@ -25,6 +25,10 @@ windows = { version = "0.58", features = [
     "Win32_Globalization",           # GetUserDefaultUILanguage 菜单语言自动检测（任务 29）
 ] }
 
+# §0-7（2026-10-01）：启动时 Win11-only 提示（RtlGetVersion 读真实 build，
+# 见 src/oscheck.rs）。官方小 crate，仅依赖锁内已有的 windows-targets。
+windows-version = "0.1"
+
 # 任务 32：构建期嵌入 VERSIONINFO + 应用清单（winresource；MSVC 目标经宿主
 # Windows SDK 的 rc.exe 编译 .res，windows-latest 自带）。default-features =
 # false 关闭 toml 特性：仅引入 version_check 一个构建依赖，Cargo.lock 增量
