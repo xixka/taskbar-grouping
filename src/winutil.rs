@@ -137,8 +137,7 @@ unsafe extern "system" fn collect_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
 pub(crate) unsafe fn enum_top_level_windows() -> Result<Vec<HWND>, String> {
     let mut out: Vec<HWND> = Vec::new();
     let lparam = LPARAM(&mut out as *mut Vec<HWND> as isize);
-    EnumWindows(Some(collect_cb), lparam)
-        .map_err(|e| format!("EnumWindows failed: {e}"))?;
+    EnumWindows(Some(collect_cb), lparam).map_err(|e| format!("EnumWindows failed: {e}"))?;
     Ok(out)
 }
 

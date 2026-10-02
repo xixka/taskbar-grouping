@@ -59,7 +59,9 @@ impl Health {
 /// 返回值携带 `tripped`（streak 达阈值），调用方负责注销自启与告警；
 /// 熔断后 streak 已归零（防每次手动运行都重复告警）。
 pub(crate) fn begin() -> Health {
-    let path = restoremap::data_dir().ok().map(|d| d.join(HEALTH_FILE_NAME));
+    let path = restoremap::data_dir()
+        .ok()
+        .map(|d| d.join(HEALTH_FILE_NAME));
     let (prev_streak, prev_running) = match &path {
         Some(p) if p.exists() => std::fs::read_to_string(p)
             .map(|c| parse(&c))
@@ -74,10 +76,7 @@ pub(crate) fn begin() -> Health {
         }
         let _ = std::fs::write(p, render(streak, Some(now)));
     }
-    Health {
-        path,
-        tripped,
-    }
+    Health { path, tripped }
 }
 
 /// 记账核心（纯函数，时钟注入，单测覆盖）。返回 `(新 streak, 是否熔断)`：

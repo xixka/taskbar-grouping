@@ -44,7 +44,8 @@ fn main() {
     // RC 传绝对路径（Command 参数原样直达 rc.exe，无 shell/RC 转义环节）；
     // RC 内的清单文件用相对路径，由 rc.exe 的 cwd（= build 脚本 cwd
     // = 包根）解析。
-    let rc_path = Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap_or_default()).join("tbg-lite.rc");
+    let rc_path =
+        Path::new(&env::var("CARGO_MANIFEST_DIR").unwrap_or_default()).join("tbg-lite.rc");
     let rc_path = rc_path.to_str().unwrap_or("tbg-lite.rc");
 
     let mut res = WindowsResource::new();

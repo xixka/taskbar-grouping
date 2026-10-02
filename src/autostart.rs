@@ -18,9 +18,9 @@
 use windows::core::PCWSTR;
 use windows::Win32::Foundation::{ERROR_FILE_NOT_FOUND, ERROR_SUCCESS, WIN32_ERROR};
 use windows::Win32::System::Registry::{
-    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW,
-    RegSetValueExW, HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE,
-    REG_OPTION_NON_VOLATILE, REG_SZ, REG_VALUE_TYPE,
+    RegCloseKey, RegCreateKeyExW, RegDeleteValueW, RegOpenKeyExW, RegQueryValueExW, RegSetValueExW,
+    HKEY, HKEY_CURRENT_USER, KEY_QUERY_VALUE, KEY_SET_VALUE, REG_OPTION_NON_VOLATILE, REG_SZ,
+    REG_VALUE_TYPE,
 };
 
 /// HKCU 下 Run 子键完整路径（开机自启注册位置，无需管理员）。
@@ -144,10 +144,8 @@ fn reg_sz_string_to_bytes(s: &str) -> Vec<u8> {
 /// REG_SZ 字节流 → String：按小端 u16 解码、截到首个 NUL。奇数长度（损坏
 /// 数据）丢弃末字节；残缺代理对由 from_utf16_lossy 兜底为 U+FFFD，不 panic。
 fn reg_sz_bytes_to_string(bytes: &[u8]) -> String {
-    let units: Vec<u16> = bytes
-        .chunks_exact(2)
-        .map(|c| u16::from_le_bytes([c[0], c[1]]))
-        .collect();
+    let (chunks, _odd_tail) = bytes.as_chunks::<2>();
+    let units: Vec<u16> = chunks.iter().map(|c| u16::from_le_bytes(*c)).collect();
     let end = units.iter().position(|&u| u == 0).unwrap_or(units.len());
     String::from_utf16_lossy(&units[..end])
 }
@@ -343,10 +341,7 @@ mod tests {
             r"D:\a\tbg\target\release\tbg-lite.exe"
         );
         // `.` 段折叠 + 重复分隔符
-        assert_eq!(
-            normalize_win_path(r"D:\a\.\\b\\app.exe"),
-            r"D:\a\b\app.exe"
-        );
+        assert_eq!(normalize_win_path(r"D:\a\.\\b\\app.exe"), r"D:\a\b\app.exe");
         // `\\?\` 前缀剥离
         assert_eq!(
             normalize_win_path(r"\\?\C:\x\y\tbg-lite.exe"),
@@ -378,7 +373,7 @@ mod tests {
         let cmd = "\"D:\\tools\\tbg-lite.exe\" watch --strategy ungroup --duration 0";
         // install 的写入形态 ↔ read 的解码形态往返
         let data = reg_sz_string_to_bytes(cmd);
-        assert!(data.len() % 2 == 0);
+        assert!(data.len().is_multiple_of(2));
         assert_eq!(&data[data.len() - 2..], &[0, 0]); // 结尾 NUL 码元
         assert_eq!(reg_sz_bytes_to_string(&data), cmd);
         // 注册表尾部对齐填充（多余零字节）：截到首个 NUL

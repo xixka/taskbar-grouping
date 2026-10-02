@@ -50,7 +50,7 @@ struct WatchSession {
 impl WatchSession {
     /// 置位停止标志并 join 后台线程。watch 线程在返回前已自行完成
     /// 摘钩、终扫与统计输出；这里只回收结果。
-    fn stop_and_join(mut self) -> Result<(), String> {
+    fn stop_and_join(self) -> Result<(), String> {
         self.stop.store(true, Ordering::Relaxed);
         match self.handle.join() {
             Ok(r) => r,
@@ -93,10 +93,7 @@ fn spawn_watch(strategy: WatchStrategy, group_name: Option<String>) -> WatchSess
 /// 为真——退出菜单但把 watch 分离式重启到后台（菜单进程退出后新窗口
 /// 继续被标记、Explorer 回写继续被任务 28 补写）。
 fn is_keep(line: &str) -> bool {
-    matches!(
-        line.trim().to_ascii_lowercase().as_str(),
-        "k" | "keep"
-    )
+    matches!(line.trim().to_ascii_lowercase().as_str(), "k" | "keep")
 }
 
 /// 任务 31：分离式后台重启 watch 子进程（`[0]` 退出选 `k`）。
@@ -111,10 +108,7 @@ fn is_keep(line: &str) -> bool {
 /// `%LOCALAPPDATA%\tbg-lite\tbg-background.log`——CREATE_NO_WINDOW 的
 /// 隐式 stdout 是无效句柄，`println!` 写失败会 panic 杀死后台进程，必须
 /// 显式给出口（打不开则回退 NUL 设备，丢弃日志但进程存活）。
-fn spawn_detached_watch(
-    strategy: WatchStrategy,
-    group_name: Option<&str>,
-) -> Result<u32, String> {
+fn spawn_detached_watch(strategy: WatchStrategy, group_name: Option<&str>) -> Result<u32, String> {
     use std::os::windows::process::CommandExt;
 
     let exe =
@@ -256,9 +250,7 @@ impl L10n {
 
     fn tip(&self) -> &'static str {
         match self.lang {
-            Lang::En => {
-                "tip: `tbg-lite --help` shows the CLI; no Ctrl+C needed — use [0] to exit"
-            }
+            Lang::En => "tip: `tbg-lite --help` shows the CLI; no Ctrl+C needed — use [0] to exit",
             Lang::Zh => "提示：`tbg-lite --help` 查看 CLI 用法；无需 Ctrl+C——用 [0] 退出",
         }
     }
@@ -324,7 +316,9 @@ impl L10n {
 
     fn item6(&self) -> &'static str {
         match self.lang {
-            Lang::En => "  [6] injection route info   (route A status + Windhawk coexistence guide)",
+            Lang::En => {
+                "  [6] injection route info   (route A status + Windhawk coexistence guide)"
+            }
             Lang::Zh => "  [6] 注入路线说明（路线 A 现状 + Windhawk 协同指引）",
         }
     }
@@ -727,10 +721,7 @@ pub(crate) fn run() -> ExitCode {
                     println!("{}", loc.invalid_group_name(&e));
                     continue;
                 }
-                session = Some(spawn_watch(
-                    WatchStrategy::Group,
-                    Some(name.to_string()),
-                ));
+                session = Some(spawn_watch(WatchStrategy::Group, Some(name.to_string())));
                 println!("{}", loc.watch_started_group(name));
             }
             "3" => match session.take() {
@@ -827,7 +818,7 @@ fn exit_code(restore_failed: bool) -> ExitCode {
 
 #[cfg(test)]
 mod tests {
-    use super::{is_yes, strip_bom, Lang, L10n};
+    use super::{is_yes, strip_bom, L10n, Lang};
 
     #[test]
     fn lang_toggle_roundtrip() {

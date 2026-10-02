@@ -63,6 +63,35 @@
    该信号需重启路线 A（以 git 历史实现 + §5 技术结论为基准重新立项）。
    菜单 `[6]` 的 Windhawk 协同指引保留（Explorer 文件夹窗口仍是
    非注入路线无法根治的唯一场景）。
+9. **CI 工程优化三项**（2026-10-02 维护者指令"做 1，2，3"，采纳工程侧
+   优化提案）：① **构建缓存**——六个编译型 job（build / runtime-smoke /
+   phase0b-acceptance / release / dev-release / lint）加
+   Swatinem/rust-cache v2.9.2（钉 SHA，SEC-02 口径）；此前每次推送各
+   job 独立冷编依赖树（单次 release 构建约 2-4 分钟 ×5，流水线时长大
+   头），缓存命中后增量构建秒级完成。门禁语义不变：各 job 仍从源码
+   独立构建，release / attestation 仍本源构建（证明主题为产物摘要，
+   与增量编译正交）。lockfile job 不加缓存（无编译产物，缓存只增噪声）。
+   ② **静态检查门禁**（审计 P2-14 收口）——新增 `lint` job：
+   `cargo fmt --all --check` + `cargo clippy --locked --workspace
+   --all-targets -- -D warnings`（默认 lint 组不加 pedantic——定位是
+   防漂移而非风格强加）；全仓一次性格式化随本决策完成（此前仓库从未
+   rustfmt 化），clippy 首跑 9 项告警同笔清零（menu unused_mut、
+   main 嵌套 unsafe / print_literal / items_after_test、autostart
+   chunks_exact / is_multiple_of、winevent thread_local const /
+   map_or / items_after_test——全部行为保持的机械修复）；release /
+   dev-release 的 needs 纳入 lint（门禁只增不减；任务 21 / 27 原文
+   "四 job"保留为历史记录，现状五 job）。③ **工具链钉版**——仓库根
+   `rust-toolchain.toml`（channel = 1.99.0）+ `Cargo.toml`
+   `rust-version = "1.99"` + ci.yml 全部 Install Rust 显式
+   `with.toolchain: 1.99.0`；此前 @stable 为移动目标（不同日期推送的
+   编译器版本不可复现），钉版同时固定 rustfmt / clippy 行为（②的
+   确定性前提）。版本依据：1.99.0 自 2026-10-01 为 stable 通道且有本
+   仓库绿色实绩（run 37002122332，master 6e2806f）；lockfile 新鲜度
+   在 1.99.0 下已验证无漂移。发布说明 MSRV 文案同步（"stable
+   toolchain" → "1.99.0 pinned"）。落地方式：预检分支 ci-preflight-0-9
+   两轮（本地零 cargo 红线不破——fmt 一次性格式化与 clippy 报告由 CI
+   执行并提交回分支，正式门禁由 lint job 承担）→ master 三笔提交
+   （钉版 / 缓存 / lint+格式化+清零+文档）。
 
 ## §1 现状（截至任务 15-20 全部完成，含 Phase R 22-26）
 
@@ -77,9 +106,9 @@
   交互菜单（任务 14：菜单启动/停止 watch、还原、inspect、退出，无需
   Ctrl+C）、开机自启三命令（任务 19：HKCU Run，无需管理员；`status` 速览
   自启/标记窗口/映射表）、审计修复（原子写/单实例/标记严格校验/钉 SHA 等）；
-  CI 四 job
+  CI 五 job
   （`build` 编译+单测门禁 / `lockfile` 新鲜度 / `runtime-smoke` 104 断言 /
-  `phase0b-acceptance` 30 断言）。
+  `phase0b-acceptance` 30 断言 / `lint` fmt+clippy 静态门禁〔§0-9〕）。
 - 验收关键数据（详见验收报告）：双线路 50 窗口压测 0 漏检 0 回写 0 写失败；UIA 证实
   线路一每窗口独立按钮、线路二 50 窗合并单组、还原回原生；工作集 9.15 MB；explorer
   文件夹窗口会被回写（已知限制）；Edge 改写后短时不回写。
@@ -307,7 +336,9 @@
 审计报告全部 15 项 BUG + 5 项 SEC 闭合：P0（22/22b）、P1（23/24/25）、
 CI 加固（26）全部 CI 绿灯；新增 31 项单元测试纳入 build job 门禁；
 审计 P2 中的工程建议（错误类型化 thiserror、stdout/stderr 分流、
-DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任务演进）。
+DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任务演进）
+〔后记：license 已随任务 21、MSRV 已随 §0-9（2026-10-02）补入
+Cargo.toml；thiserror / 分流 / DRY 仍开放〕。
 
 ### Phase S — 杀软误报治理（2026-09-28 维护者指令：解决卡巴斯基报毒）
 
@@ -414,6 +445,7 @@ DRY 合并、MSRV/license 字段）未纳入本轮（非漏洞项，随后续任
 | 层面 | 方法 |
 |---|---|
 | 编译门禁 | CI `build`（windows-latest，`cargo build --release --locked` + `cargo test --locked`，任务 22b/23） |
+| 静态门禁 | CI `lint`（`cargo fmt --all --check` + `cargo clippy --locked --workspace --all-targets -- -D warnings`，§0-9，审计 P2-14 收口） |
 | 双线路行为回归 | CI `runtime-smoke`（104 断言，含启动扫存量、交互菜单、自启 Phase I、pin Phase P、固定/取消固定 Phase T、磁贴联动 Phase L、常驻加固 Phase X；原注入版 Phase INJ 27 断言已随注入版按 §0-8 移除）+ `phase0b-acceptance`（30 断言），每次 push |
 | 固定磁贴联动 | CI 断言（任务 18，Phase L：.lnk AUMID == 运行窗口 AUMID + UIA 合并按钮，已绿） |
 | 真机清单 | 竞态感知率、覆盖矩阵全量、长时回写、视觉细节、explorer 重启（验收报告 §5） |

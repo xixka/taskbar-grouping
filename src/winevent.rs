@@ -37,10 +37,10 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::{HMODULE, HWND};
 use windows::Win32::UI::Accessibility::{SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK};
 use windows::Win32::UI::WindowsAndMessaging::{
-    EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY, EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_SHOW,
-    GetShellWindow, GetWindowThreadProcessId, MSG, MWMO_INPUTAVAILABLE,
-    MsgWaitForMultipleObjectsEx, OBJID_WINDOW, PeekMessageW, PM_REMOVE, QS_ALLINPUT,
-    WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS,
+    GetShellWindow, GetWindowThreadProcessId, MsgWaitForMultipleObjectsEx, PeekMessageW,
+    EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY, EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_SHOW, MSG,
+    MWMO_INPUTAVAILABLE, OBJID_WINDOW, PM_REMOVE, QS_ALLINPUT, WINEVENT_OUTOFCONTEXT,
+    WINEVENT_SKIPOWNPROCESS,
 };
 
 use crate::appid;
@@ -166,7 +166,7 @@ enum SweepKind {
 thread_local! {
     /// 回调只会在安装钩子的线程（即本模块 `run` 所在线程）的消息泵里触发，
     /// 因此用 thread_local 承载状态即可，无需跨线程同步。
-    static WATCHER: RefCell<Option<WatcherState>> = RefCell::new(None);
+    static WATCHER: RefCell<Option<WatcherState>> = const { RefCell::new(None) };
 }
 
 unsafe extern "system" fn win_event_cb(
@@ -191,11 +191,7 @@ unsafe extern "system" fn win_event_cb(
 }
 
 impl WatcherState {
-    fn new(
-        opts: &WatchOptions,
-        group_value: String,
-        map: Option<RestoreMap>,
-    ) -> Self {
+    fn new(opts: &WatchOptions, group_value: String, map: Option<RestoreMap>) -> Self {
         Self {
             dry_run: opts.dry_run,
             verbose: opts.verbose,
@@ -549,12 +545,9 @@ impl WatcherState {
     }
 
     fn log_skip(&self, name: &str, hwnd: HWND, reason: &str) {
-        println!(
-            "{} {} {} skip: {reason}",
-            self.ts(),
-            name,
-            unsafe { fmt_window(hwnd) }
-        );
+        println!("{} {} {} skip: {reason}", self.ts(), name, unsafe {
+            fmt_window(hwnd)
+        });
     }
 
     /// 任务 28：回写对抗（reassert）——对已处理窗口核对标记是否仍在；
@@ -609,7 +602,7 @@ impl WatcherState {
                 if !self
                     .map
                     .as_ref()
-                    .map_or(false, |m| m.peek(key, &self.group_value).is_some())
+                    .is_some_and(|m| m.peek(key, &self.group_value).is_some())
                 {
                     // 无条目（跨会话残留 / 竞态遗漏）：按首次改写补录原值，
                     // 落盘失败则不写（还原能力优先于分组生效，apply_group 同则）
@@ -686,7 +679,10 @@ impl WatcherState {
         );
         println!(
             "events (per event): CREATE={} SHOW={} NAMECHANGE={} DESTROY(tracked)={}",
-            self.stats.events_create, self.stats.events_show, self.stats.events_namechange, self.stats.events_destroy_tracked
+            self.stats.events_create,
+            self.stats.events_show,
+            self.stats.events_namechange,
+            self.stats.events_destroy_tracked
         );
         println!(
             "startup sweep (task 13): pre-existing rewritten={} already-marked={}",
@@ -813,21 +809,6 @@ fn clip(s: &str, max: usize) -> String {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::clip;
-
-    #[test]
-    fn clip_marks_truncation() {
-        assert_eq!(clip("short", 10), "short");
-        assert_eq!(clip("0123456789", 10), "0123456789"); // 恰好 10 不截
-        // "exactly-10!" 是 11 字符 → 截为前 9 字符 + '~'
-        assert_eq!(clip("exactly-10!", 10), "exactly-1~");
-        assert_eq!(clip("a-bit-too-long-value", 10), "a-bit-too~");
-        assert_eq!(clip("中文窗口标题很长", 5), "中文窗口~");
-    }
-}
-
 pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     // 任务 20（最先执行，早于一切可能快速失败的前置）：异常熔断记账。
     // 上一轮短命消失（< 30s，崩溃/启动即死）累计到阈值 → 注销自启，
@@ -856,7 +837,11 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     let ring = RingLog::open(opts.ring_log);
     ring.log(&format!(
         "watch start: strategy={} group={:?} duration={:?} dry_run={}",
-        if matches!(opts.strategy, WatchStrategy::Ungroup) { "ungroup" } else { "group" },
+        if matches!(opts.strategy, WatchStrategy::Ungroup) {
+            "ungroup"
+        } else {
+            "group"
+        },
         opts.group_name,
         opts.duration,
         opts.dry_run
@@ -907,10 +892,13 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     ];
     let mut hooks: Vec<HWINEVENTHOOK> = Vec::with_capacity(events.len());
     for &ev in &events {
-        let h = unsafe { SetWinEventHook(ev, ev, HMODULE::default(), Some(win_event_cb), 0, 0, flags) };
+        let h =
+            unsafe { SetWinEventHook(ev, ev, HMODULE::default(), Some(win_event_cb), 0, 0, flags) };
         if h.is_invalid() {
             for installed in &hooks {
-                unsafe { let _ = UnhookWinEvent(*installed); };
+                unsafe {
+                    let _ = UnhookWinEvent(*installed);
+                };
             }
             WATCHER.with(|cell| *cell.borrow_mut() = None);
             return Err(format!("watch: SetWinEventHook failed for event {ev:#06x}"));
@@ -946,7 +934,10 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
             println!("duration: until Ctrl+C (hard exit, no stats printed)");
         }
     } else {
-        println!("duration: {:?} (Ctrl+C = hard exit without stats)", opts.duration);
+        println!(
+            "duration: {:?} (Ctrl+C = hard exit without stats)",
+            opts.duration
+        );
     }
     if opts.dry_run {
         println!("mode: dry-run (no AUMID writes)");
@@ -1118,5 +1109,20 @@ fn current_shell_pid() -> Option<u32> {
         } else {
             Some(pid)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::clip;
+
+    #[test]
+    fn clip_marks_truncation() {
+        assert_eq!(clip("short", 10), "short");
+        assert_eq!(clip("0123456789", 10), "0123456789"); // 恰好 10 不截
+                                                          // "exactly-10!" 是 11 字符 → 截为前 9 字符 + '~'
+        assert_eq!(clip("exactly-10!", 10), "exactly-1~");
+        assert_eq!(clip("a-bit-too-long-value", 10), "a-bit-too~");
+        assert_eq!(clip("中文窗口标题很长", 5), "中文窗口~");
     }
 }

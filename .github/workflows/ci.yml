@@ -2,9 +2,9 @@ name: ci
 
 on:
   push:
-    # 任务 21：分支推送（四 job 验证，维持既有门禁不弱化）+ tag 推送
+    # 任务 21：分支推送（五 job 验证，维持既有门禁不弱化）+ tag 推送
     # （v* 额外产出发布物：zip + SHA256 + build-provenance attestation，
-    # release job needs 四 job 全绿才执行）
+    # release job needs 五 job 全绿才执行；§0-9：五 = 四 + lint）
     branches: ['**']
     tags: ['v*']
   workflow_dispatch:
@@ -137,14 +137,44 @@ jobs:
   # 属性存储改写分组"假设（限制⑤为结构性，见 docs/plan.md §5）。
   # 脚本 ci/runtime-smoke-inj.ps1 亦随后删除（git 历史可溯）。
 
-  # 任务 21（SEC-04）：发布物生成——tag push（v*）触发。四 job 全绿才轮到
+  # §0-9（2026-10-02，审计 P2-14 收口）：静态检查门禁——
+  # cargo fmt --all --check + cargo clippy --locked --workspace
+  # --all-targets -- -D warnings（默认 lint 组，不加 pedantic：门禁定位是
+  # 防漂移而非风格强加）。一次性格式化已随 §0-9 完成（此前仓库从未
+  # rustfmt 化）；工具链经 rust-toolchain.toml 钉版，rustfmt / clippy
+  # 行为随之确定。release / dev-release 的 needs 自本 job 起纳入
+  # （门禁只增不减）。
+  lint:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (audit SEC-02: pinned)
+
+      # §0-9：lint 腿安装额外含 clippy / rustfmt 组件
+      - name: Install Rust (pinned 1.99.0 + clippy/rustfmt)
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # audit SEC-02: pinned
+        with:
+          toolchain: 1.99.0
+          components: clippy, rustfmt
+
+      # §0-9：rust-cache 构建缓存（同 build job 注）
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2 (audit SEC-02: pinned)
+
+      - name: rustfmt check
+        run: cargo fmt --all --check
+
+      - name: clippy (deny warnings)
+        run: cargo clippy --locked --workspace --all-targets -- -D warnings
+
+  # 任务 21（SEC-04）：发布物生成——tag push（v*）触发。五 job 全绿才轮到
   # 本 job（needs 全部）。产物：tbg-lite-<tag>-x86_64-windows.zip +
   # SHA256SUMS.txt + GitHub Release；build-provenance attestation 由
   # actions/attest-build-provenance 出具（任务栏干预类工具易受
   # SmartScreen/杀软误报，可验证来源即信誉）。actions 全部钉 SHA。
   release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build, lockfile, runtime-smoke, phase0b-acceptance]
+    needs: [build, lockfile, runtime-smoke, phase0b-acceptance, lint]
     runs-on: windows-latest
     permissions:
       contents: write
@@ -200,7 +230,7 @@ jobs:
           $notes = "tbg-lite $tag`n`nZero-injection edition (the separate injection edition shipped 2026-09-28~2026-10-02 was removed per plan v2 SS0-8: on Windows 11 the taskbar never reads the grouping AUMID through the documented property store, so it could not change grouping).`n`nArtifact: tbg-lite-$tag-x86_64-windows.zip`n  $liteLine`n`nVerification: build provenance attested for the zip (see release attestations); verify locally with 'gh attestation verify <zip> --repo $env:GITHUB_REPOSITORY'.`n`nMSRV: 1.99.0 (pinned via rust-toolchain.toml). Built with cargo build --release --locked --workspace from tag $tag."
           gh release create $tag --title "tbg-lite $tag" --notes $notes tbg-lite-$tag-x86_64-windows.zip SHA256SUMS.txt
 
-  # 任务 27（维护者 2026-09-23 指令）：dev 滚动发布通道。分支推送 → 四 job
+  # 任务 27（维护者 2026-09-23 指令）：dev 滚动发布通道。分支推送 → 五 job
   # 门禁全绿 → 覆盖式发布 prerelease `dev`（tag 滚动指向当次 commit）。
   # tag 推送（v*）仍走上方 release 正式通道，两通道互不干扰。
   # 关键点：action-gh-release 不移动已存在的 tag（target_commitish 仅在
@@ -209,7 +239,7 @@ jobs:
   # 取消在途的（取消无副作用——新 job 会完整重建）。
   dev-release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/heads/')
-    needs: [build, lockfile, runtime-smoke, phase0b-acceptance]
+    needs: [build, lockfile, runtime-smoke, phase0b-acceptance, lint]
     runs-on: windows-latest
     concurrency:
       group: dev-release

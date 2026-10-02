@@ -114,8 +114,11 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   ——计数勘误：此前称 35 项系虚报，run 35700057611 build 日志实数 28 项，
   28+5+5+1+8=47；纳入 build job 门禁
   （`cargo test --locked`）；`cargo build --release --locked`（任务 22b 起）。
-- `cargo fmt` / `cargo clippy` 未配置、未验证 → 见"待确认"（需一次性格式
-  化任务，见审计 P2-14）。
+- `cargo fmt --all --check` / `cargo clippy --locked --workspace --all-targets
+  -- -D warnings`（§0-9，2026-10-02 起）：CI `lint` job 静态门禁（审计
+  P2-14 收口）；全仓一次性格式化与 clippy 首跑 9 项告警清零已随 §0-9
+  完成；工具链经 `rust-toolchain.toml` 钉版 1.99.0，fmt / clippy 行为
+  随之确定（本地 rustup 同源解析）。
 
 ## 目录导览
 
@@ -177,12 +180,16 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 - `.github/workflows/ci.yml` —— 唯一 CI workflow：`build`（release 编译门禁）
   + `lockfile`（任务 22：Cargo.lock 生成/新鲜度门禁）+ `runtime-smoke`
   （任务 9：运行时冒烟）+ `phase0b-acceptance`（任务 10：Phase 0b 验收）
-  四个 job + `release`（任务 21：tag v* 触发，needs 四 job，打包 zip +
+  + `lint`（§0-9：fmt --check + clippy -D warnings 静态门禁，审计 P2-14
+  收口）五个 job + `release`（任务 21：tag v* 触发，needs 五 job，打包 zip +
   SHA256SUMS + attest-build-provenance + GitHub Release）+ `dev-release`
-  （任务 27：分支推送触发，needs 四 job，滚动 prerelease `dev`——
+  （任务 27：分支推送触发，needs 五 job，滚动 prerelease `dev`——
   action-gh-release v3.0.3 不移动已存在 tag，发布前 gh release delete
   --cleanup-tag 双回收保证 tag 滚动指向当次 commit；job 级 concurrency
-  防连续推送竞态；产物与正式通道同构含 attestation）
+  防连续推送竞态；产物与正式通道同构含 attestation）。§0-9（2026-10-02）：
+  六个编译型 job 配 Swatinem/rust-cache v2.9.2（钉 SHA）构建缓存
+  （lockfile 无编译不加）；全部 Install Rust 经 `rust-toolchain.toml`
+  钉版 1.99.0（本地 rustup 同源）。
 - `docs/plan.md` —— 实施计划 v2（§0 决策 / §3 任务清单，已全部完成；提交一一对应任务号）
 - `docs/coverage-matrix.md` —— 多应用覆盖矩阵记录表（任务 15 已回填关闭：
   维护者 2026-09-23 指令"CI 测试等同真机测试"，CI 行即真机行；§8 裁决
@@ -195,7 +202,7 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 
 ## 完成的定义（DoD）
 
-1. CI（windows-latest，`cargo build --release`）通过；
+1. CI（windows-latest，`cargo build --release` + `lint` 静态门禁〔§0-9 起〕）通过；
 2. 每个任务单独提交，格式 `feat(模块): 任务号-标题`；
 3. 涉及 Windows 运行时行为的改动，在提交信息中注明"运行时行为待 Windows 实测"
    （CI 只验证编译，不验证行为）。任务 9 起：双线路 AUMID 行为已由
@@ -246,7 +253,9 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 
 ## 待确认（未验证 / 未定）
 
-- `cargo fmt` / `cargo clippy` 是否纳入 CI 门禁（需一次性格式化任务；审计 P2-14）
+- 已定（§0-9，2026-10-02）：`cargo fmt` / `cargo clippy` 纳入 CI `lint`
+  job 门禁（fmt --all --check + clippy --all-targets -- -D warnings）；
+  一次性格式化已完成，clippy 首跑 9 项告警清零；审计 P2-14 收口。
 - `cargo build`（debug）未验证
 - 已定（任务 21，2026-09-23）：LICENSE = MIT（Cargo.toml + LICENSE 文件）；
   发布流程 = CI `release` job（tag v* 触发，zip + SHA256SUMS +

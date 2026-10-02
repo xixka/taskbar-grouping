@@ -2,7 +2,7 @@
 //! `PKEY_AppUserModel_ID`（docs/plan.md §4 路线 B+ 的核心公开 API，
 //! 任务 5 引入）。
 
-use windows::core::{BSTR, PROPVARIANT, Result};
+use windows::core::{Result, BSTR, PROPVARIANT};
 use windows::Win32::Foundation::HWND;
 use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
@@ -27,7 +27,9 @@ unsafe fn prop_store(hwnd: HWND) -> Result<IPropertyStore> {
 pub(crate) unsafe fn get_aumid(hwnd: HWND) -> Result<String> {
     let store = prop_store(hwnd)?;
     let pv = store.GetValue(&PKEY_AppUserModel_ID)?;
-    Ok(BSTR::try_from(&pv).map(|b| b.to_string()).unwrap_or_default())
+    Ok(BSTR::try_from(&pv)
+        .map(|b| b.to_string())
+        .unwrap_or_default())
 }
 
 /// 写入窗口 AppUserModelID。
@@ -103,7 +105,8 @@ pub(crate) fn validate_aumid_value(v: &str) -> std::result::Result<(), String> {
     }
     if v.chars().any(|c| (c as u32) < 0x20) {
         return Err(
-            "value must not contain control characters (tab / newline / others < U+0020)".to_string(),
+            "value must not contain control characters (tab / newline / others < U+0020)"
+                .to_string(),
         );
     }
     Ok(())
@@ -154,7 +157,9 @@ pub(crate) fn strip_suffix(aumid: &str, hwnd: HWND) -> Option<&str> {
     let (head, tail) = aumid.split_at(pos);
     let hex = &tail[SUFFIX_MARKER.len()..];
     let hex_ok = (1..=16).contains(&hex.len())
-        && hex.bytes().all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b));
+        && hex
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'A'..=b'F').contains(&b));
     if hex_ok && hex == winutil::hwnd_hex(hwnd) {
         Some(head)
     } else {
@@ -174,7 +179,10 @@ mod tests {
     fn group_aumid_accepts_valid_names() {
         assert_eq!(group_aumid("work").unwrap(), "TBG.Group.work");
         assert_eq!(group_aumid("a.b_c-9").unwrap(), "TBG.Group.a.b_c-9");
-        assert_eq!(group_aumid(&"x".repeat(32)).unwrap(), format!("TBG.Group.{}", "x".repeat(32)));
+        assert_eq!(
+            group_aumid(&"x".repeat(32)).unwrap(),
+            format!("TBG.Group.{}", "x".repeat(32))
+        );
     }
 
     #[test]
@@ -258,7 +266,7 @@ mod tests {
         assert!(validate_aumid_value("a\u{1}b").is_err()); // 控制字符
         assert!(validate_aumid_value(&"x".repeat(129)).is_ok()); // 恰好 129 码元
         assert!(validate_aumid_value(&"x".repeat(130)).is_err()); // 超长
-        // 审计 BUG-06：增补平面字符按 2 码元计
+                                                                  // 审计 BUG-06：增补平面字符按 2 码元计
         assert!(validate_aumid_value(&"\u{1F600}".repeat(65)).is_err()); // 130 码元
         assert!(validate_aumid_value(&"\u{1F600}".repeat(64)).is_ok()); // 128 码元
     }

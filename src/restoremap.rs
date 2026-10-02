@@ -77,8 +77,13 @@ fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
     f.sync_all()
         .map_err(|e| format!("restore map tmp sync failed: {e}"))?;
     drop(f);
-    fs::rename(&tmp, path)
-        .map_err(|e| format!("restore map rename failed ({} -> {}): {e}", tmp.display(), path.display()))
+    fs::rename(&tmp, path).map_err(|e| {
+        format!(
+            "restore map rename failed ({} -> {}): {e}",
+            tmp.display(),
+            path.display()
+        )
+    })
 }
 
 fn serialize(entries: &BTreeMap<usize, (String, String)>) -> String {
@@ -256,8 +261,8 @@ mod tests {
 
     /// 每个测试独立的临时目录（不引第三方依赖）。
     fn test_dir(name: &str) -> PathBuf {
-        let d = std::env::temp_dir()
-            .join(format!("tbg-restoremap-test-{}-{name}", std::process::id()));
+        let d =
+            std::env::temp_dir().join(format!("tbg-restoremap-test-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&d);
         fs::create_dir_all(&d).unwrap();
         d
@@ -271,10 +276,13 @@ mod tests {
         m.record(0x20176, "TBG.Group.work", "Microsoft.Notepad");
         m.record(0x30148, "TBG.Group.work", "");
         // take 校验共享值一致（防 HWND 复用误还原）
-        assert_eq!(m.take(0x20176, "TBG.Group.work").unwrap(), "Microsoft.Notepad");
+        assert_eq!(
+            m.take(0x20176, "TBG.Group.work").unwrap(),
+            "Microsoft.Notepad"
+        );
         assert_eq!(m.take(0x30148, "TBG.Group.work").unwrap(), ""); // 原空 → clear 语义
         assert_eq!(m.take(0x99999, "TBG.Group.work"), None); // 无条目
-        // 已 take 的条目不复存在
+                                                             // 已 take 的条目不复存在
         assert_eq!(m.take(0x20176, "TBG.Group.work"), None);
         // 共享值不一致（HWND 被复用成别的组）→ 拒绝
         m.record(0x500AC, "TBG.Group.a", "App.A");
@@ -339,7 +347,11 @@ mod tests {
         // 损坏表拒载（fail-safe，不静默吞记录）
         assert!(RestoreMap::load(&dir).is_err());
         // 半行残文（原子写修复前的典型损伤形态）同样拒载
-        fs::write(dir.join(MAP_FILE_NAME), "# tbg-restore.tsv v1\n20176\tTBG.Group").unwrap();
+        fs::write(
+            dir.join(MAP_FILE_NAME),
+            "# tbg-restore.tsv v1\n20176\tTBG.Group",
+        )
+        .unwrap();
         assert!(RestoreMap::load(&dir).is_err());
         let _ = fs::remove_dir_all(&dir);
     }

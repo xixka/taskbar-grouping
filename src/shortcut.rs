@@ -26,23 +26,23 @@ use std::ffi::OsStr;
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use windows::core::{BSTR, Interface, PCWSTR, PROPVARIANT};
+use windows::core::{Interface, BSTR, PCWSTR, PROPVARIANT};
 use windows::Win32::Foundation::BOOL;
 use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
 use windows::Win32::System::Com::{
     CoCreateInstance, IPersistFile, CLSCTX_INPROC_SERVER, STGM_READ,
 };
-use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
 use windows::Win32::UI::Shell::PropertiesSystem::IPropertyStore;
+use windows::Win32::UI::Shell::{IShellLinkW, ShellLink};
 // 任务 17：固定目录写入后 nudging explorer 重读该目录（SHChangeNotify，
 // 公开 Shell API；best-effort，不设门禁——任务栏何时呈现固定项由 shell 决定）
-use windows::Win32::UI::Shell::{SHChangeNotify, SHCNF_PATHW, SHCNE_UPDATEDIR};
+use windows::Win32::UI::Shell::{SHChangeNotify, SHCNE_UPDATEDIR, SHCNF_PATHW};
 // 任务 18 修复轮 1：taskbarpin/taskbarunpin verb——与用户右键“固定到任务栏”
 // 等价的 shell 动词（公开 ShellExecuteExW 入口；零注入：只对自己生成的 .lnk
 // 调用 shell 自己的动词处理器）。run 35807254850 实锤：仅写 .lnk 进固定
 // 文夹不会被 Taskband 注册表登记（重启 explorer 后无固定按钮），必须经
 // verb（或未文档化的 Taskband 二进制）才能注册固定项
-use windows::Win32::UI::Shell::{ShellExecuteExW, SHELLEXECUTEINFOW, SEE_MASK_FLAG_NO_UI};
+use windows::Win32::UI::Shell::{ShellExecuteExW, SEE_MASK_FLAG_NO_UI, SHELLEXECUTEINFOW};
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 
 /// 默认输出子目录名（数据目录下，`restoremap::data_dir()/pin`）。
@@ -332,9 +332,7 @@ mod tests {
         );
         assert_eq!(
             pinned_dir_from(Path::new(r"D:\roam")),
-            PathBuf::from(
-                r"D:\roam\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"
-            )
+            PathBuf::from(r"D:\roam\Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar")
         );
     }
 }

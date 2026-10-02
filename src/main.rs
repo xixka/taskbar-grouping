@@ -260,8 +260,12 @@ pub(crate) fn cmd_inspect(args: &[String]) -> Result<(), String> {
 
     if let Some(hwnd) = hwnd {
         unsafe {
-            let aumid = appid::get_aumid(hwnd)
-                .map_err(|e| format!("inspect 0x{}: read AUMID failed: {e}", winutil::hwnd_hex(hwnd)))?;
+            let aumid = appid::get_aumid(hwnd).map_err(|e| {
+                format!(
+                    "inspect 0x{}: read AUMID failed: {e}",
+                    winutil::hwnd_hex(hwnd)
+                )
+            })?;
             if json {
                 // 单窗 JSON 对象（aumid 恒可读，否则上面已 Err）
                 println!(
@@ -323,8 +327,8 @@ pub(crate) fn cmd_inspect(args: &[String]) -> Result<(), String> {
     }
 
     println!(
-        "{:<18} {:<7} {:<26} {:<30} {}",
-        "HWND", "PID", "CLASS", "AUMID", "TITLE"
+        "{:<18} {:<7} {:<26} {:<30} TITLE",
+        "HWND", "PID", "CLASS", "AUMID"
     );
     for hwnd in unsafe { winutil::enum_top_level_windows()? } {
         if !all && !unsafe { winutil::is_app_window(hwnd) } {
@@ -355,38 +359,6 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn truncate_short_passthrough() {
-        assert_eq!(truncate("abc", 5), "abc");
-        assert_eq!(truncate("", 5), "");
-        assert_eq!(truncate("abc", 3), "abc"); // 恰好等长不截
-    }
-
-    #[test]
-    fn truncate_marks_with_tilde() {
-        assert_eq!(truncate("abcdef", 5), "abcd~");
-        // 多字节字符不切半：按字符取，非字节
-        assert_eq!(truncate("中文测试", 3), "中文~");
-    }
-
-    #[test]
-    fn json_escape_specials() {
-        assert_eq!(json_escape("plain"), "plain");
-        assert_eq!(json_escape("a\"b"), "a\\\"b");
-        assert_eq!(json_escape("a\\b"), "a\\\\b");
-        assert_eq!(json_escape("a\nb"), "a\\nb");
-        assert_eq!(json_escape("a\rb"), "a\\rb");
-        assert_eq!(json_escape("a\tb"), "a\\tb");
-        assert_eq!(json_escape("a\u{1}b"), "a\\u0001b");
-        // 非 ASCII 原样（JSON 字符串允许裸 UTF-8）
-        assert_eq!(json_escape("中文"), "中文");
-    }
-}
-
 fn cmd_watch(args: &[String]) -> Result<(), String> {
     let mut duration_secs: u64 = 60;
     let mut dry_run = false;
@@ -399,9 +371,9 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
         match a.as_str() {
             "--duration" => {
                 let v = next_arg(&mut it, "--duration")?;
-                duration_secs = v
-                    .parse()
-                    .map_err(|_| format!("usage: watch: invalid duration '{v}' (expected seconds)"))?;
+                duration_secs = v.parse().map_err(|_| {
+                    format!("usage: watch: invalid duration '{v}' (expected seconds)")
+                })?;
             }
             "--strategy" => {
                 let v = next_arg(&mut it, "--strategy")?;
@@ -468,7 +440,7 @@ pub(crate) fn cmd_restore(args: &[String]) -> Result<(), String> {
         // （审计 BUG-11：枚举失败上抛而非空表静默空跑）
         let targets: Vec<HWND> = match hwnd {
             Some(h) => vec![h],
-            None => unsafe { winutil::enum_top_level_windows()? },
+            None => winutil::enum_top_level_windows()?,
         };
         // 审计 BUG-12（任务 23）：单窗详情模式只应由 --hwnd 显式指定触发；
         // 原先仅按 targets.len()==1 判定，全系统恰有一个顶层窗口时会误入
@@ -550,8 +522,7 @@ pub(crate) fn cmd_restore(args: &[String]) -> Result<(), String> {
                 let key = hwnd.0 as usize;
                 if map_mutex.is_none() {
                     map_mutex = Some(
-                        singleinstance::MapMutex::acquire()
-                            .map_err(|e| format!("restore: {e}"))?,
+                        singleinstance::MapMutex::acquire().map_err(|e| format!("restore: {e}"))?,
                     );
                 }
                 if !map_loaded {
@@ -569,7 +540,10 @@ pub(crate) fn cmd_restore(args: &[String]) -> Result<(), String> {
                         Ok(m) => map = Some(m),
                         Err(e) => {
                             failed += 1;
-                            println!("0x{} restore map load FAILED: {e}", winutil::hwnd_hex(*hwnd));
+                            println!(
+                                "0x{} restore map load FAILED: {e}",
+                                winutil::hwnd_hex(*hwnd)
+                            );
                             // 审计 BUG-01（任务 22）：失败也置位——否则每个共享
                             // AUMID 窗口都会重复读盘并把 failed 虚增 N 次
                             map_loaded = true;
@@ -603,25 +577,20 @@ pub(crate) fn cmd_restore(args: &[String]) -> Result<(), String> {
                                 );
                             }
                         }
-                        Some(original) if original.is_empty() => {
-                            match appid::clear_aumid(*hwnd) {
-                                Ok(()) => {
-                                    cleared += 1;
-                                    println!(
-                                        "0x{} \"{}\" -> <cleared>",
-                                        winutil::hwnd_hex(*hwnd),
-                                        aumid
-                                    );
-                                }
-                                Err(e) => {
-                                    failed += 1;
-                                    println!(
-                                        "0x{} clear FAILED: {e}",
-                                        winutil::hwnd_hex(*hwnd)
-                                    );
-                                }
+                        Some(original) if original.is_empty() => match appid::clear_aumid(*hwnd) {
+                            Ok(()) => {
+                                cleared += 1;
+                                println!(
+                                    "0x{} \"{}\" -> <cleared>",
+                                    winutil::hwnd_hex(*hwnd),
+                                    aumid
+                                );
                             }
-                        }
+                            Err(e) => {
+                                failed += 1;
+                                println!("0x{} clear FAILED: {e}", winutil::hwnd_hex(*hwnd));
+                            }
+                        },
                         Some(original) => match appid::set_aumid(*hwnd, &original) {
                             Ok(()) => {
                                 restored += 1;
@@ -711,8 +680,7 @@ fn cmd_set(args: &[String]) -> Result<(), String> {
     }
     let _com = winutil::ComGuard::init()?;
     unsafe {
-        let before = appid::get_aumid(hwnd)
-            .map_err(|e| format!("set: read AUMID failed: {e}"))?;
+        let before = appid::get_aumid(hwnd).map_err(|e| format!("set: read AUMID failed: {e}"))?;
         let new_id = if suffix {
             if before.contains(appid::SUFFIX_MARKER) {
                 return Err(format!(
@@ -743,12 +711,15 @@ fn cmd_set(args: &[String]) -> Result<(), String> {
             v
         };
         let t0 = std::time::Instant::now();
-        appid::set_aumid(hwnd, &new_id)
-            .map_err(|e| format!("set: write AUMID failed: {e}"))?;
+        appid::set_aumid(hwnd, &new_id).map_err(|e| format!("set: write AUMID failed: {e}"))?;
         let write_time = t0.elapsed();
-        let after = appid::get_aumid(hwnd)
-            .map_err(|e| format!("set: re-read AUMID failed: {e}"))?;
-        println!("AUMID: \"{}\" -> \"{}\"", winutil::shown_aumid(&before), winutil::shown_aumid(&after));
+        let after =
+            appid::get_aumid(hwnd).map_err(|e| format!("set: re-read AUMID failed: {e}"))?;
+        println!(
+            "AUMID: \"{}\" -> \"{}\"",
+            winutil::shown_aumid(&before),
+            winutil::shown_aumid(&after)
+        );
         println!("property write+commit took {write_time:?}");
         println!(
             "note: taskbar re-layout latency must be observed manually (docs/plan.md task 5-(2))"
@@ -790,7 +761,9 @@ fn cmd_install(args: &[String]) -> Result<(), String> {
         }
         (winevent::WatchStrategy::Ungroup, None) => None,
         (winevent::WatchStrategy::Ungroup, Some(_)) => {
-            return Err("usage: install: --group is only valid together with --strategy group".into())
+            return Err(
+                "usage: install: --group is only valid together with --strategy group".into(),
+            )
         }
     };
     if let Some(name) = group_name.as_deref() {
@@ -971,9 +944,7 @@ fn cmd_pin(args: &[String]) -> Result<(), String> {
     }
     if let Some((icon_file, _)) = &icon_spec {
         if !std::path::Path::new(icon_file).is_file() {
-            return Err(format!(
-                "usage: pin: --icon file '{icon_file}' not found"
-            ));
+            return Err(format!("usage: pin: --icon file '{icon_file}' not found"));
         }
     }
     // 参数串不做语义解释，但拦控制字符（与 set --value 同口径，防破坏
@@ -992,7 +963,9 @@ fn cmd_pin(args: &[String]) -> Result<(), String> {
     };
     let target_norm = canonical(target_path, "--target")?;
     let icon_norm = match &icon_spec {
-        Some((icon_file, idx)) => Some((canonical(std::path::Path::new(icon_file), "--icon")?, *idx)),
+        Some((icon_file, idx)) => {
+            Some((canonical(std::path::Path::new(icon_file), "--icon")?, *idx))
+        }
         None => None,
     };
     // 输出目录：--to-taskbar → 任务栏用户固定目录（任务 17）；--out →
@@ -1026,7 +999,11 @@ fn cmd_pin(args: &[String]) -> Result<(), String> {
     println!(
         "pin       : {} ({})",
         outcome.path.display(),
-        if outcome.replaced { "replaced existing file" } else { "new file" }
+        if outcome.replaced {
+            "replaced existing file"
+        } else {
+            "new file"
+        }
     );
     println!(
         "aumid     : {} (read back from the saved .lnk: verified)",
@@ -1100,7 +1077,42 @@ fn cmd_unpin(args: &[String]) -> Result<(), String> {
     std::fs::remove_file(&path)
         .map_err(|e| format!("unpin: cannot remove '{}' : {e}", path.display()))?;
     shortcut::notify_shell_dir_change(&dir);
-    println!("unpin     : removed tile '{}' (group '{group_name}')", path.display());
+    println!(
+        "unpin     : removed tile '{}' (group '{group_name}')",
+        path.display()
+    );
     println!("taskbar   : the tile disappears when explorer restarts or at the next logon");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn truncate_short_passthrough() {
+        assert_eq!(truncate("abc", 5), "abc");
+        assert_eq!(truncate("", 5), "");
+        assert_eq!(truncate("abc", 3), "abc"); // 恰好等长不截
+    }
+
+    #[test]
+    fn truncate_marks_with_tilde() {
+        assert_eq!(truncate("abcdef", 5), "abcd~");
+        // 多字节字符不切半：按字符取，非字节
+        assert_eq!(truncate("中文测试", 3), "中文~");
+    }
+
+    #[test]
+    fn json_escape_specials() {
+        assert_eq!(json_escape("plain"), "plain");
+        assert_eq!(json_escape("a\"b"), "a\\\"b");
+        assert_eq!(json_escape("a\\b"), "a\\\\b");
+        assert_eq!(json_escape("a\nb"), "a\\nb");
+        assert_eq!(json_escape("a\rb"), "a\\rb");
+        assert_eq!(json_escape("a\tb"), "a\\tb");
+        assert_eq!(json_escape("a\u{1}b"), "a\\u0001b");
+        // 非 ASCII 原样（JSON 字符串允许裸 UTF-8）
+        assert_eq!(json_escape("中文"), "中文");
+    }
 }
