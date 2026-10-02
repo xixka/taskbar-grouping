@@ -16,8 +16,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (audit SEC-02: pinned)
 
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (audit SEC-02: pinned)
+      # §0-9：钉版 1.99.0（详见仓库根 rust-toolchain.toml 头注）
+      - name: Install Rust (pinned 1.99.0)
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # audit SEC-02: pinned
+        with:
+          toolchain: 1.99.0
 
       # 任务 22b（审计 SEC-03）：Cargo.lock 已入库，--locked 保证可复现构建
       - name: Build (release, locked)
@@ -37,8 +40,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (audit SEC-02: pinned)
 
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (audit SEC-02: pinned)
+      # §0-9：钉版 1.99.0（详见仓库根 rust-toolchain.toml 头注）
+      - name: Install Rust (pinned 1.99.0)
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # audit SEC-02: pinned
+        with:
+          toolchain: 1.99.0
 
       - name: Verify Cargo.lock freshness
         run: |
@@ -56,8 +62,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (audit SEC-02: pinned)
 
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (audit SEC-02: pinned)
+      # §0-9：钉版 1.99.0（详见仓库根 rust-toolchain.toml 头注）
+      - name: Install Rust (pinned 1.99.0)
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # audit SEC-02: pinned
+        with:
+          toolchain: 1.99.0
 
       - name: Build (release, locked)
         run: cargo build --release --locked --workspace
@@ -84,8 +93,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (audit SEC-02: pinned)
 
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (audit SEC-02: pinned)
+      # §0-9：钉版 1.99.0（详见仓库根 rust-toolchain.toml 头注）
+      - name: Install Rust (pinned 1.99.0)
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # audit SEC-02: pinned
+        with:
+          toolchain: 1.99.0
 
       - name: Build (release, locked)
         run: cargo build --release --locked --workspace
@@ -124,8 +136,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (audit SEC-02: pinned)
 
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (audit SEC-02: pinned)
+      # §0-9：钉版 1.99.0（详见仓库根 rust-toolchain.toml 头注）
+      - name: Install Rust (pinned 1.99.0)
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # audit SEC-02: pinned
+        with:
+          toolchain: 1.99.0
 
       - name: Build (release, locked)
         run: cargo build --release --locked --workspace
@@ -158,7 +173,7 @@ jobs:
           $tag = "${env:GITHUB_REF_NAME}"
           $sums = Get-Content SHA256SUMS.txt
           $liteLine = ($sums | Where-Object { $_ -like '*tbg-lite-*' } | Select-Object -First 1)
-          $notes = "tbg-lite $tag`n`nZero-injection edition (the separate injection edition shipped 2026-09-28~2026-10-02 was removed per plan v2 SS0-8: on Windows 11 the taskbar never reads the grouping AUMID through the documented property store, so it could not change grouping).`n`nArtifact: tbg-lite-$tag-x86_64-windows.zip`n  $liteLine`n`nVerification: build provenance attested for the zip (see release attestations); verify locally with 'gh attestation verify <zip> --repo $env:GITHUB_REPOSITORY'.`n`nMSRV: stable toolchain. Built with cargo build --release --locked --workspace from tag $tag."
+          $notes = "tbg-lite $tag`n`nZero-injection edition (the separate injection edition shipped 2026-09-28~2026-10-02 was removed per plan v2 SS0-8: on Windows 11 the taskbar never reads the grouping AUMID through the documented property store, so it could not change grouping).`n`nArtifact: tbg-lite-$tag-x86_64-windows.zip`n  $liteLine`n`nVerification: build provenance attested for the zip (see release attestations); verify locally with 'gh attestation verify <zip> --repo $env:GITHUB_REPOSITORY'.`n`nMSRV: 1.99.0 (pinned via rust-toolchain.toml). Built with cargo build --release --locked --workspace from tag $tag."
           gh release create $tag --title "tbg-lite $tag" --notes $notes tbg-lite-$tag-x86_64-windows.zip SHA256SUMS.txt
 
   # 任务 27（维护者 2026-09-23 指令）：dev 滚动发布通道。分支推送 → 四 job
@@ -183,8 +198,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0 (audit SEC-02: pinned)
 
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable (audit SEC-02: pinned)
+      # §0-9：钉版 1.99.0（详见仓库根 rust-toolchain.toml 头注）
+      - name: Install Rust (pinned 1.99.0)
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # audit SEC-02: pinned
+        with:
+          toolchain: 1.99.0
 
       - name: Build (release, locked)
         run: cargo build --release --locked --workspace

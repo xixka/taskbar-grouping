@@ -1,0 +1,16 @@
+# §0-9（2026-10-02）：工具链钉版 1.99.0——CI 与本地同源。
+# 此前 CI 的 dtolnay/rust-toolchain@<SHA> 无 with.toolchain 时装 "stable"，
+# 是移动目标（不同日期的推送所用编译器版本不同，可复现性打折）。
+# 钉版后：
+#   ① 本文件经 rustup 目录覆盖机制约束本地 cargo；
+#   ② ci.yml 六处 Install Rust 步骤显式 with.toolchain: 1.99.0（同版）；
+#   ③ Cargo.toml rust-version = "1.99"（MSRV 声明 = CI 实测口径，
+#      仓库只承诺验证过的版本组合）；
+#   ④ rustfmt / clippy 行为随之钉死（§0-9 lint 门禁的确定性前提）。
+# 版本依据：1.99.0 自 2026-10-01 起为 stable 通道，且有本仓库绿色实绩
+# （run 37002122332，master 6e2806f，stable 通道解析即 1.99.0）。
+# 升版流程：本文件 channel + Cargo.toml rust-version + ci.yml 全部
+# with.toolchain + release job 说明文案中的 MSRV 字符串，四者同笔提交
+# → push 验证 lockfile 新鲜度（generate-lockfile 无 diff）与全门禁绿。
+[toolchain]
+channel = "1.99.0"
