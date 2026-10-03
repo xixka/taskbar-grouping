@@ -5,8 +5,8 @@ use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetAncestor, GetClassNameW, GetWindowLongW, GetWindowTextW,
-    GetWindowThreadProcessId, IsWindowVisible, SendMessageTimeoutW, SMTO_ABORTIFHUNG, WM_GETTEXT,
-    GA_ROOT, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
+    GetWindowThreadProcessId, IsWindowVisible, SendMessageTimeoutW, GA_ROOT, GWL_EXSTYLE,
+    SMTO_ABORTIFHUNG, WM_GETTEXT, WS_EX_TOOLWINDOW,
 };
 
 /// 把 API 写入 `buf` 的前 `len` 个 UTF-16 码元转成 `String`。

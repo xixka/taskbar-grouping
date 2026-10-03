@@ -208,7 +208,10 @@ pub(crate) fn render(streak: u32, running: Option<RunningState>) -> String {
                 r.start
             ),
             // v1 兼容渲染（roundtrip 测试用；begin/heartbeat 恒写心跳列）
-            None => format!("{HEADER}\nabnormal_streak\t{streak}\nrunning\t{}\n", r.start),
+            None => format!(
+                "{HEADER}\nabnormal_streak\t{streak}\nrunning\t{}\n",
+                r.start
+            ),
         },
         None => format!("{HEADER}\nabnormal_streak\t{streak}\n"),
     }
@@ -318,7 +321,10 @@ mod tests {
         let junk = "# tbg-lite health v1\nabnormal_streak\tzz\nrunning\tabc\nwhatever\tx\n";
         assert_eq!(parse(junk), (0, None));
         // 无表头也能读
-        assert_eq!(parse("abnormal_streak\t1\nrunning\t42\n"), (1, running_v1(42)));
+        assert_eq!(
+            parse("abnormal_streak\t1\nrunning\t42\n"),
+            (1, running_v1(42))
+        );
         // v1 行 + v2 行同文件（后行覆盖前行，宽容）
         assert_eq!(
             parse("running\t10\nrunning\t20\t30\n"),

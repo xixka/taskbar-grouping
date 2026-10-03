@@ -24,13 +24,13 @@
 use std::fs;
 use std::path::PathBuf;
 
+use windows::core::HSTRING;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, WAIT_OBJECT_0};
 use windows::Win32::System::Threading::{
     CreateEventW, GetCurrentProcessId, GetExitCodeProcess, OpenEventW, OpenProcess, SetEvent,
     TerminateProcess, WaitForSingleObject, EVENT_MODIFY_STATE, PROCESS_ACCESS_RIGHTS,
     PROCESS_QUERY_LIMITED_INFORMATION, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
 };
-use windows::core::HSTRING;
 
 use crate::restoremap;
 
@@ -74,7 +74,10 @@ pub(crate) fn register(strategy: &str, group: Option<&str>) -> Result<(), String
         let _ = fs::create_dir_all(dir);
     }
     let pid = unsafe { GetCurrentProcessId() };
-    let mut text = format!("{HEADER}\npid\t{pid}\nstrategy\t{strategy}\nstarted\t{}\n", unix_now());
+    let mut text = format!(
+        "{HEADER}\npid\t{pid}\nstrategy\t{strategy}\nstarted\t{}\n",
+        unix_now()
+    );
     if let Some(g) = group {
         // 组名经 group_aumid 校验（[A-Za-z0-9._-]，1..=32）——无 TSV 元字符
         text.push_str("group\t");
@@ -153,7 +156,9 @@ impl StopEvent {
 
 impl Drop for StopEvent {
     fn drop(&mut self) {
-        unsafe { let _ = CloseHandle(self.0); };
+        unsafe {
+            let _ = CloseHandle(self.0);
+        };
     }
 }
 
@@ -169,10 +174,14 @@ pub(crate) fn open_process(pid: u32) -> Option<HANDLE> {
 /// 进程是否仍在运行（OpenProcess + GetExitCodeProcess != STILL_ACTIVE；
 /// 终止但对象未释放的进程不误报为存活）。
 pub(crate) fn is_running(pid: u32) -> bool {
-    let Some(h) = open_process(pid) else { return false };
+    let Some(h) = open_process(pid) else {
+        return false;
+    };
     let mut code = 0u32;
     let ok = unsafe { GetExitCodeProcess(h, &mut code) }.is_ok();
-    unsafe { let _ = CloseHandle(h); };
+    unsafe {
+        let _ = CloseHandle(h);
+    };
     ok && code == STILL_ACTIVE
 }
 
@@ -184,7 +193,9 @@ pub(crate) fn signal_stop(pid: u32) -> bool {
         return false;
     };
     let ok = unsafe { SetEvent(h) }.is_ok();
-    unsafe { let _ = CloseHandle(h); };
+    unsafe {
+        let _ = CloseHandle(h);
+    };
     ok
 }
 
@@ -200,7 +211,9 @@ pub(crate) fn terminate(handle: HANDLE) -> bool {
 
 /// 关闭外部打开的进程句柄。
 pub(crate) fn close_handle(handle: HANDLE) {
-    unsafe { let _ = CloseHandle(handle); };
+    unsafe {
+        let _ = CloseHandle(handle);
+    };
 }
 
 /// `stop` 的完整流程（CLI `tbg-lite stop` 与菜单 `[3]` 共用）。

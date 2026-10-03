@@ -499,7 +499,8 @@ impl WatcherState {
         }
         if self.dry_run {
             self.stats.dry_run_hits += 1;
-            evln!(self,
+            evln!(
+                self,
                 "{} {} {} [dry-run] aumid={:?} -> {:?}",
                 self.ts(),
                 name,
@@ -519,7 +520,8 @@ impl WatcherState {
                     SweepKind::Resweep => self.stats.resweep_rewritten += 1,
                     SweepKind::None => {}
                 }
-                evln!(self,
+                evln!(
+                    self,
                     "{} {} {} aumid={:?} -> {:?} (write {:.1}ms)",
                     self.ts(),
                     name,
@@ -534,7 +536,8 @@ impl WatcherState {
             }
             Err(e) => {
                 self.stats.write_fail += 1;
-                evln!(self,
+                evln!(
+                    self,
                     "{} {} {} aumid={:?} write FAILED: {e}",
                     self.ts(),
                     name,
@@ -553,7 +556,8 @@ impl WatcherState {
         let shared = self.group_value.clone();
         if self.dry_run {
             self.stats.dry_run_hits += 1;
-            evln!(self,
+            evln!(
+                self,
                 "{} {} {} [dry-run] aumid={:?} -> {:?} (group)",
                 self.ts(),
                 name,
@@ -566,7 +570,8 @@ impl WatcherState {
         }
         let Some(map) = self.map.as_mut() else {
             self.stats.write_fail += 1;
-            evln!(self,
+            evln!(
+                self,
                 "{} {} {} group write FAILED: no restore map loaded",
                 self.ts(),
                 name,
@@ -590,7 +595,8 @@ impl WatcherState {
         if let Err(e) = map.save() {
             map.remove(key);
             self.stats.write_fail += 1;
-            evln!(self,
+            evln!(
+                self,
                 "{} {} {} group write FAILED: {e} (AUMID left untouched)",
                 self.ts(),
                 name,
@@ -607,7 +613,8 @@ impl WatcherState {
                     SweepKind::Resweep => self.stats.resweep_rewritten += 1,
                     SweepKind::None => {}
                 }
-                evln!(self,
+                evln!(
+                    self,
                     "{} {} {} aumid={:?} -> {:?} (group, write {:.1}ms)",
                     self.ts(),
                     name,
@@ -627,7 +634,8 @@ impl WatcherState {
                     let _ = map.save();
                 }
                 self.stats.write_fail += 1;
-                evln!(self,
+                evln!(
+                    self,
                     "{} {} {} aumid={:?} group write FAILED: {e}",
                     self.ts(),
                     name,
@@ -640,12 +648,9 @@ impl WatcherState {
     }
 
     fn log_skip(&self, name: &str, hwnd: HWND, reason: &str) {
-        evln!(self,
-            "{} {} {} skip: {reason}",
-            self.ts(),
-            name,
-            unsafe { fmt_window(hwnd) }
-        );
+        evln!(self, "{} {} {} skip: {reason}", self.ts(), name, unsafe {
+            fmt_window(hwnd)
+        });
     }
 
     /// 任务 28：回写对抗（reassert）——对已处理窗口核对标记是否仍在；
@@ -706,7 +711,8 @@ impl WatcherState {
                     // 落盘失败则不写（还原能力优先于分组生效，apply_group 同则）
                     let Some(map) = self.map.as_mut() else {
                         self.stats.write_fail += 1;
-                        eevln!(self,
+                        eevln!(
+                            self,
                             "{} REASSERT {} group reassert FAILED: no restore map loaded",
                             self.ts(),
                             fmt_window(hwnd)
@@ -727,7 +733,8 @@ impl WatcherState {
                     if let Err(e) = map.save() {
                         map.remove(key);
                         self.stats.write_fail += 1;
-                        eevln!(self,
+                        eevln!(
+                            self,
                             "{} REASSERT {} map save FAILED: {e} (AUMID left untouched)",
                             self.ts(),
                             fmt_window(hwnd)
@@ -747,7 +754,8 @@ impl WatcherState {
                 self.stats.reasserted += 1;
                 // 任务 50（H）：补写成功 → rewritten 集（终扫口径）
                 self.rewritten.insert(key);
-                evln!(self,
+                evln!(
+                    self,
                     "{} REASSERT {} aumid={:?} -> {:?} (marker lost, re-applied, write {:.1}ms)",
                     self.ts(),
                     fmt_window(hwnd),
@@ -758,7 +766,8 @@ impl WatcherState {
             }
             Err(e) => {
                 self.stats.write_fail += 1;
-                eevln!(self,
+                eevln!(
+                    self,
                     "{} REASSERT {} write FAILED: {e}",
                     self.ts(),
                     fmt_window(hwnd)
@@ -994,8 +1003,11 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     // 后启动者拒绝并指明停止途径。守卫持有至 run 返回（线程结束/
     // 进程退出自动释放）。与映射表互斥（Global+SID）正交：ungroup
     // watch 不写表不持 MapMutex，但同线路双开仍拒。
-    let strategy_name =
-        if matches!(opts.strategy, WatchStrategy::Ungroup) { "ungroup" } else { "group" };
+    let strategy_name = if matches!(opts.strategy, WatchStrategy::Ungroup) {
+        "ungroup"
+    } else {
+        "group"
+    };
     let _watch_mutex =
         crate::singleinstance::WatchMutex::acquire(strategy_name, opts.group_name.as_deref())?;
 
@@ -1108,7 +1120,10 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
                 println!("duration: until Ctrl+C (graceful stop: stats printed; press Ctrl+C twice to hard-kill)");
             }
         } else {
-            println!("duration: {:?} (Ctrl+C = graceful stop with stats)", opts.duration);
+            println!(
+                "duration: {:?} (Ctrl+C = graceful stop with stats)",
+                opts.duration
+            );
         }
         if opts.dry_run {
             println!("mode: dry-run (no AUMID writes)");
@@ -1290,7 +1305,9 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
         println!();
         if stopped_from_console {
             // 任务 34（E/S）：控制台信号（Ctrl+C/Break/关窗/注销/关机）
-            println!("watch: console stop signal (task 34) — removing hooks and running the final scan");
+            println!(
+                "watch: console stop signal (task 34) — removing hooks and running the final scan"
+            );
         } else if stopped_by_stop_cmd {
             // 任务 37（D）：`tbg-lite stop` 命令
             println!("watch: stop requested via 'tbg-lite stop' (task 37) — removing hooks and running the final scan");

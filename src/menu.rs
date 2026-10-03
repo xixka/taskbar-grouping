@@ -121,10 +121,7 @@ fn is_keep(line: &str) -> bool {
 /// 任务 37（审查 D）：子进程就绪后自登记 `tbg-watch.tsv` 并监听
 /// `Local\tbg-lite.stop.<pid>`——`tbg-lite stop` 与菜单 `[3]` 都能停它
 /// （旧提示"用 [3] 停止"从此为真）。
-fn spawn_detached_watch(
-    strategy: WatchStrategy,
-    group_name: Option<&str>,
-) -> Result<u32, String> {
+fn spawn_detached_watch(strategy: WatchStrategy, group_name: Option<&str>) -> Result<u32, String> {
     use std::os::windows::process::CommandExt;
 
     let exe =
@@ -503,7 +500,9 @@ impl L10n {
             Lang::En => match r {
                 StopResult::NoWatch => String::new(),
                 StopResult::StaleCleared { pid } => {
-                    format!("menu: background watch (pid {pid}) was not running — stale entry removed")
+                    format!(
+                        "menu: background watch (pid {pid}) was not running — stale entry removed"
+                    )
                 }
                 StopResult::Graceful { pid } => {
                     format!("menu: background watch stopped gracefully (pid {pid})")
@@ -542,12 +541,10 @@ impl L10n {
     /// 任务 37（D）：菜单横幅的后台实例提示行。
     fn status_background_running(&self, pid: u32) -> String {
         match self.lang {
-            Lang::En => format!(
-                "background watch running (pid {pid}) — [3] or 'tbg-lite stop' stops it"
-            ),
-            Lang::Zh => format!(
-                "后台 watch 运行中（pid {pid}）——[3] 或 'tbg-lite stop' 可停止"
-            ),
+            Lang::En => {
+                format!("background watch running (pid {pid}) — [3] or 'tbg-lite stop' stops it")
+            }
+            Lang::Zh => format!("后台 watch 运行中（pid {pid}）——[3] 或 'tbg-lite stop' 可停止"),
         }
     }
 
@@ -794,10 +791,7 @@ pub(crate) fn run() -> ExitCode {
                     outln!("{}", loc.invalid_group_name(&e));
                     continue;
                 }
-                session = Some(spawn_watch(
-                    WatchStrategy::Group,
-                    Some(name.to_string()),
-                ));
+                session = Some(spawn_watch(WatchStrategy::Group, Some(name.to_string())));
                 outln!("{}", loc.watch_started_group(name));
             }
             "3" => {

@@ -222,9 +222,7 @@ pub(crate) fn install(command: &str) -> Result<InstallOutcome, String> {
     let previous = match read_command() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!(
-                "autostart: warning: previous value unreadable ({e}) — installing over it"
-            );
+            eprintln!("autostart: warning: previous value unreadable ({e}) — installing over it");
             None
         }
     };

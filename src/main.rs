@@ -1033,7 +1033,9 @@ fn cmd_stop(args: &[String]) -> Result<(), String> {
             println!("watch: graceful stop timed out (pid {pid}) — terminated");
         }
         watchpid::StopResult::Failed { pid } => {
-            println!("watch: could not stop pid {pid} (terminate failed) — try taskkill /PID {pid}");
+            println!(
+                "watch: could not stop pid {pid} (terminate failed) — try taskkill /PID {pid}"
+            );
         }
     }
     Ok(())

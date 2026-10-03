@@ -168,8 +168,10 @@ impl RestoreMap {
     /// `write_fail`；`\t` 不拦（`parse` 的 `splitn(3, '\t')` 只切前三
     /// 列，第三列原值整体保留，不构成注入面）。
     pub(crate) fn record(&mut self, hwnd: usize, group_value: &str, original: &str) -> bool {
-        if original.contains('\r') || original.contains('\n')
-            || group_value.contains('\r') || group_value.contains('\n')
+        if original.contains('\r')
+            || original.contains('\n')
+            || group_value.contains('\r')
+            || group_value.contains('\n')
         {
             return false;
         }

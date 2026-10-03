@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
 use windows::Win32::Foundation::BOOL;
 use windows::Win32::System::Console::{
-    SetConsoleCtrlHandler, CTRL_BREAK_EVENT, CTRL_C_EVENT, CTRL_CLOSE_EVENT, CTRL_LOGOFF_EVENT,
+    SetConsoleCtrlHandler, CTRL_BREAK_EVENT, CTRL_CLOSE_EVENT, CTRL_C_EVENT, CTRL_LOGOFF_EVENT,
     CTRL_SHUTDOWN_EVENT,
 };
 
@@ -143,7 +143,9 @@ pub(crate) fn stderr_is_console() -> bool {
 /// 8192）。失败静默——菜单渲染尽力而为。
 fn write_console_stdout(s: &str) {
     unsafe {
-        let Ok(h) = GetStdHandle(STD_OUTPUT_HANDLE) else { return };
+        let Ok(h) = GetStdHandle(STD_OUTPUT_HANDLE) else {
+            return;
+        };
         let wide: Vec<u16> = s.encode_utf16().collect();
         let mut written: u32 = 0;
         for chunk in wide.chunks(8192) {
