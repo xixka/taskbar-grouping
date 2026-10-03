@@ -28,7 +28,7 @@
 //! 行为断言已可由 CI 冒烟代行）。
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -91,6 +91,19 @@ pub(crate) struct WatchOptions {
     /// （启动/停止/扫存量/explorer 重启/重扫/熔断）落入数据目录
     /// tbg.log（256 KiB 上限，超限截半，原子替换）。
     pub(crate) ring_log: bool,
+    /// 任务 37/40（审查 D/Q）：后台模式（`--background`）——环形日志
+    /// 恒开（stdout 已归 NUL，ring log 是唯一事件轨迹）；就绪后登记
+    /// `tbg-watch.tsv` 并监听 `Local\tbg-lite.stop.<pid>` 命名事件
+    /// （`tbg-lite stop` 优雅停止，任务 31 保活实例的可停性由此而来）。
+    pub(crate) background: bool,
+    /// 任务 42（审查 P1-P，2026-09-25）：安静模式（交互菜单传入 true）。
+    /// 逐窗口事件行（SWEEP/mark/REASSERT/skip）、启动横幅、shell 重启
+    /// 告警不再打印到与菜单共享的 stdout（防事件流冲刷菜单 UI/提示符/
+    /// 输入行），转落环形日志（本模式下恒开，256 KiB 有界，事件可完整
+    /// 追溯）；summary 行（启动扫统计/重扫统计）与统计块（停止后
+    /// `final_scan_and_report` 聚合输出）保留 stdout。CLI 模式恒 false，
+    /// 输出行为与旧版完全一致。
+    pub(crate) quiet: bool,
 }
 
 /// 观测统计（对应 docs/plan.md §7 Phase 0b-(6) 的压测数据需求）。
@@ -132,9 +145,37 @@ struct Stats {
     resweep_marked: u64,
 }
 
+/// 任务 42（审查 P1-P）：逐窗口事件行输出——安静模式（交互菜单）转
+/// 环形日志（菜单 UI/提示符/输入行不再被事件流冲刷，事件仍可完整
+/// 追溯）；CLI 模式 = println! 原语义（CI 断言与文档口径不变）。
+macro_rules! evln {
+    ($self:expr, $($arg:tt)*) => {
+        if $self.quiet {
+            $self.ring.log(&format!($($arg)*));
+        } else {
+            println!($($arg)*);
+        }
+    };
+}
+
+/// 同上，stderr 变体（写入失败告警行）。
+macro_rules! eevln {
+    ($self:expr, $($arg:tt)*) => {
+        if $self.quiet {
+            $self.ring.log(&format!($($arg)*));
+        } else {
+            eprintln!($($arg)*);
+        }
+    };
+}
+
 struct WatcherState {
     dry_run: bool,
     verbose: bool,
+    /// 任务 42（P）：安静模式——逐窗口事件行入环形日志而非 stdout。
+    quiet: bool,
+    /// 任务 42（P）：环形日志句柄（安静模式的事件轨迹出口）。
+    ring: RingLog,
     strategy: WatchStrategy,
     /// 线路二的共享 AUMID（`strategy == Ungroup` 时为空串）。
     group_value: String,
@@ -147,8 +188,17 @@ struct WatcherState {
     baseline: HashSet<usize>,
     baseline_count: u64,
     /// 本会话已处理（改写 / 判定跳过）的窗口（含启动扫存量的产出），
-    /// 以 HWND 数值为键。
-    handled: HashSet<usize>,
+    /// 以 HWND 数值为键，值 = 处理时的属主进程 PID。
+    /// 任务 50（审查 L）：HWND 数值可能被系统复用——事件入口与 5s
+    /// 复核先比对 PID，不一致即按新窗口处理（旧条目清除），换取复用
+    /// 场景零误标（成本：一次 GetWindowThreadProcessId）。
+    handled: HashMap<usize, u32>,
+    /// 任务 50（审查 H）：本会话**真实写入成功**（apply_* 成功 + reassert
+    /// 补写成功）的窗口集合——终扫 `reverted` 的判定口径。旧口径用
+    /// `handled`（含 cross-line / shell / already-marked 跳过类）会把
+    /// 从未改写过的窗口误报为 "app rewrote its AUMID"；DESTROY 与 PID
+    /// 复用清理同步移除。
+    rewritten: HashSet<usize>,
     /// 当前扫描类别（任务 13 启动扫 / 任务 20 重启重扫；None = 事件驱动），
     /// 供 consider 链路由改写与幂等命中计数。
     sweep_kind: SweepKind,
@@ -191,17 +241,25 @@ unsafe extern "system" fn win_event_cb(
 }
 
 impl WatcherState {
-    fn new(opts: &WatchOptions, group_value: String, map: Option<RestoreMap>) -> Self {
+    fn new(
+        opts: &WatchOptions,
+        group_value: String,
+        map: Option<RestoreMap>,
+        ring: RingLog,
+    ) -> Self {
         Self {
             dry_run: opts.dry_run,
             verbose: opts.verbose,
+            quiet: opts.quiet,
+            ring,
             strategy: opts.strategy,
             group_value,
             map,
             started: Instant::now(),
             baseline: HashSet::new(),
             baseline_count: 0,
-            handled: HashSet::new(),
+            handled: HashMap::new(),
+            rewritten: HashSet::new(),
             sweep_kind: SweepKind::None,
             stats: Stats::default(),
         }
@@ -287,13 +345,14 @@ impl WatcherState {
                 "NAME"
             }
             EVENT_OBJECT_DESTROY => {
-                let was_handled = self.handled.remove(&key);
+                let was_handled = self.handled.remove(&key).is_some();
+                let was_rewritten = self.rewritten.remove(&key);
                 let was_baseline = self.baseline.remove(&key);
                 if was_handled | was_baseline {
                     self.stats.events_destroy_tracked += 1;
                 }
                 // 线路二：已分组窗口销毁 → 丢弃还原映射（HWND 可能被复用）
-                if was_handled && matches!(self.strategy, WatchStrategy::Group) {
+                if (was_handled || was_rewritten) && matches!(self.strategy, WatchStrategy::Group) {
                     if let Some(map) = self.map.as_mut() {
                         if map.remove(key) {
                             let _ = map.save();
@@ -304,7 +363,23 @@ impl WatcherState {
             }
             _ => return,
         };
-        if self.handled.contains(&key) {
+        // 任务 50（审查 L）：HWND 复用防护——handled 记录的属主 PID 与
+        // 当前不符 = 数值已被系统复用成新窗口：清旧条目（含 rewritten
+        // 与线路二映射条目），按新窗口重新走 consider
+        if let Some(&old_pid) = self.handled.get(&key) {
+            if old_pid != unsafe { winutil::window_pid(hwnd) } {
+                self.handled.remove(&key);
+                self.rewritten.remove(&key);
+                if matches!(self.strategy, WatchStrategy::Group) {
+                    if let Some(map) = self.map.as_mut() {
+                        if map.remove(key) {
+                            let _ = map.save();
+                        }
+                    }
+                }
+            }
+        }
+        if self.handled.contains_key(&key) {
             // 已处理过（CREATE 处理后紧随的 SHOW 等）。NAMECHANGE 例外：
             // 任务 24 口径下它是标题后置窗口的重评估入口；任务 28 起对
             // 已处理窗口承担第二职责——回写检测入口（reassert：标记
@@ -324,6 +399,8 @@ impl WatcherState {
     }
 
     unsafe fn consider(&mut self, name: &str, hwnd: HWND, key: usize) {
+        // 任务 50（L）：记录属主 PID，供事件入口与 5s 复核做复用判定
+        let pid = winutil::window_pid(hwnd);
         if !winutil::is_app_window(hwnd) {
             // CREATE 早期窗口常尚不可见 / 无标题：不进 handled，
             // 待 SHOW 事件再评估
@@ -335,7 +412,7 @@ impl WatcherState {
             if self.verbose {
                 self.log_skip(name, hwnd, "shell window");
             }
-            self.handled.insert(key);
+            self.handled.insert(key, pid);
             return;
         }
         if winutil::is_cloaked(hwnd) {
@@ -403,7 +480,7 @@ impl WatcherState {
             if self.verbose {
                 self.log_skip(name, hwnd, reason);
             }
-            self.handled.insert(key);
+            self.handled.insert(key, pid);
             return;
         }
         self.stats.candidates += 1;
@@ -415,13 +492,14 @@ impl WatcherState {
 
     /// 线路一：追加每窗口后缀（任务 6 原逻辑）。
     unsafe fn apply_ungroup(&mut self, name: &str, hwnd: HWND, key: usize, aumid: String) {
+        let pid = winutil::window_pid(hwnd);
         let suffixed = appid::suffixed_aumid(&aumid, hwnd);
         if suffixed.truncated {
             self.stats.truncated += 1;
         }
         if self.dry_run {
             self.stats.dry_run_hits += 1;
-            println!(
+            evln!(self,
                 "{} {} {} [dry-run] aumid={:?} -> {:?}",
                 self.ts(),
                 name,
@@ -429,7 +507,7 @@ impl WatcherState {
                 winutil::shown_aumid(&aumid),
                 suffixed.value
             );
-            self.handled.insert(key);
+            self.handled.insert(key, pid);
             return;
         }
         let t0 = Instant::now();
@@ -441,7 +519,7 @@ impl WatcherState {
                     SweepKind::Resweep => self.stats.resweep_rewritten += 1,
                     SweepKind::None => {}
                 }
-                println!(
+                evln!(self,
                     "{} {} {} aumid={:?} -> {:?} (write {:.1}ms)",
                     self.ts(),
                     name,
@@ -450,11 +528,13 @@ impl WatcherState {
                     suffixed.value,
                     t0.elapsed().as_secs_f64() * 1000.0
                 );
-                self.handled.insert(key);
+                self.handled.insert(key, pid);
+                // 任务 50（H）：真实写入成功 → rewritten 集（终扫口径）
+                self.rewritten.insert(key);
             }
             Err(e) => {
                 self.stats.write_fail += 1;
-                println!(
+                evln!(self,
                     "{} {} {} aumid={:?} write FAILED: {e}",
                     self.ts(),
                     name,
@@ -469,10 +549,11 @@ impl WatcherState {
     /// 线路二：改写为共享 AUMID（任务 8）。先落盘还原映射，再写属性；
     /// 映射保存失败则放弃改写（保住还原能力优先于分组生效）。
     unsafe fn apply_group(&mut self, name: &str, hwnd: HWND, key: usize, aumid: String) {
+        let pid = winutil::window_pid(hwnd);
         let shared = self.group_value.clone();
         if self.dry_run {
             self.stats.dry_run_hits += 1;
-            println!(
+            evln!(self,
                 "{} {} {} [dry-run] aumid={:?} -> {:?} (group)",
                 self.ts(),
                 name,
@@ -480,12 +561,12 @@ impl WatcherState {
                 winutil::shown_aumid(&aumid),
                 shared
             );
-            self.handled.insert(key);
+            self.handled.insert(key, pid);
             return;
         }
         let Some(map) = self.map.as_mut() else {
             self.stats.write_fail += 1;
-            println!(
+            evln!(self,
                 "{} {} {} group write FAILED: no restore map loaded",
                 self.ts(),
                 name,
@@ -493,11 +574,23 @@ impl WatcherState {
             );
             return;
         };
-        map.record(key, &shared, &aumid);
+        // 任务 36（P1-F）：原生 AUMID / 共享值含 \r \n 时拒绝记录并跳过
+        // 改写（TSV 行式格式下换行自毁整表）；write_fail 计数 + 告警，
+        // 保住其余窗口与整表可用性
+        if !map.record(key, &shared, &aumid) {
+            self.stats.write_fail += 1;
+            evln!(self,
+                "{} {} {} group write REJECTED: AUMID contains line breaks (map integrity guard, task 36; AUMID left untouched)",
+                self.ts(),
+                name,
+                fmt_window(hwnd)
+            );
+            return;
+        }
         if let Err(e) = map.save() {
             map.remove(key);
             self.stats.write_fail += 1;
-            println!(
+            evln!(self,
                 "{} {} {} group write FAILED: {e} (AUMID left untouched)",
                 self.ts(),
                 name,
@@ -514,7 +607,7 @@ impl WatcherState {
                     SweepKind::Resweep => self.stats.resweep_rewritten += 1,
                     SweepKind::None => {}
                 }
-                println!(
+                evln!(self,
                     "{} {} {} aumid={:?} -> {:?} (group, write {:.1}ms)",
                     self.ts(),
                     name,
@@ -523,7 +616,9 @@ impl WatcherState {
                     shared,
                     t0.elapsed().as_secs_f64() * 1000.0
                 );
-                self.handled.insert(key);
+                self.handled.insert(key, pid);
+                // 任务 50（H）：真实写入成功 → rewritten 集（终扫口径）
+                self.rewritten.insert(key);
             }
             Err(e) => {
                 // 回滚映射条目：AUMID 未动，条目已作废
@@ -532,7 +627,7 @@ impl WatcherState {
                     let _ = map.save();
                 }
                 self.stats.write_fail += 1;
-                println!(
+                evln!(self,
                     "{} {} {} aumid={:?} group write FAILED: {e}",
                     self.ts(),
                     name,
@@ -545,9 +640,12 @@ impl WatcherState {
     }
 
     fn log_skip(&self, name: &str, hwnd: HWND, reason: &str) {
-        println!("{} {} {} skip: {reason}", self.ts(), name, unsafe {
-            fmt_window(hwnd)
-        });
+        evln!(self,
+            "{} {} {} skip: {reason}",
+            self.ts(),
+            name,
+            unsafe { fmt_window(hwnd) }
+        );
     }
 
     /// 任务 28：回写对抗（reassert）——对已处理窗口核对标记是否仍在；
@@ -608,18 +706,28 @@ impl WatcherState {
                     // 落盘失败则不写（还原能力优先于分组生效，apply_group 同则）
                     let Some(map) = self.map.as_mut() else {
                         self.stats.write_fail += 1;
-                        eprintln!(
+                        eevln!(self,
                             "{} REASSERT {} group reassert FAILED: no restore map loaded",
                             self.ts(),
                             fmt_window(hwnd)
                         );
                         return;
                     };
-                    map.record(key, &self.group_value, &aumid);
+                    // 任务 36（P1-F）：原值带换行 → 拒绝补录并跳过补写
+                    // （AUMID 保持现状，无还原损失）
+                    if !map.record(key, &self.group_value, &aumid) {
+                        self.stats.write_fail += 1;
+                        eevln!(self,
+                            "{} REASSERT {} reassert REJECTED: AUMID contains line breaks (map integrity guard, task 36; AUMID left untouched)",
+                            self.ts(),
+                            fmt_window(hwnd)
+                        );
+                        return;
+                    }
                     if let Err(e) = map.save() {
                         map.remove(key);
                         self.stats.write_fail += 1;
-                        eprintln!(
+                        eevln!(self,
                             "{} REASSERT {} map save FAILED: {e} (AUMID left untouched)",
                             self.ts(),
                             fmt_window(hwnd)
@@ -637,7 +745,9 @@ impl WatcherState {
         match appid::set_aumid(hwnd, &target) {
             Ok(()) => {
                 self.stats.reasserted += 1;
-                println!(
+                // 任务 50（H）：补写成功 → rewritten 集（终扫口径）
+                self.rewritten.insert(key);
+                evln!(self,
                     "{} REASSERT {} aumid={:?} -> {:?} (marker lost, re-applied, write {:.1}ms)",
                     self.ts(),
                     fmt_window(hwnd),
@@ -648,7 +758,7 @@ impl WatcherState {
             }
             Err(e) => {
                 self.stats.write_fail += 1;
-                eprintln!(
+                eevln!(self,
                     "{} REASSERT {} write FAILED: {e}",
                     self.ts(),
                     fmt_window(hwnd)
@@ -661,9 +771,26 @@ impl WatcherState {
     /// （NAMECHANGE 入口覆盖导航/标题变化场景，此入口覆盖其余）。快照
     /// 键集后逐个 reassert；读失败即跳过（DESTROY 簿记负责清理）。
     unsafe fn reverify_handled(&mut self) {
-        let keys: Vec<usize> = self.handled.iter().copied().collect();
+        let keys: Vec<usize> = self.handled.keys().copied().collect();
         for key in keys {
             let hwnd = HWND(key as *mut _);
+            // 任务 50（审查 L）：PID 复用防护——当前属主与记录不符
+            // （含窗口已销毁 = pid 0）= 数值被复用/回收：清旧条目按新
+            // 窗口处理（后续事件会重新评估）
+            if let Some(&old_pid) = self.handled.get(&key) {
+                if old_pid != winutil::window_pid(hwnd) {
+                    self.handled.remove(&key);
+                    self.rewritten.remove(&key);
+                    if matches!(self.strategy, WatchStrategy::Group) {
+                        if let Some(map) = self.map.as_mut() {
+                            if map.remove(key) {
+                                let _ = map.save();
+                            }
+                        }
+                    }
+                    continue;
+                }
+            }
             self.reassert(hwnd, key);
         }
     }
@@ -731,14 +858,21 @@ impl WatcherState {
         let mut reverted: Vec<String> = Vec::new();
         let mut alive_marked: u64 = 0;
         let mut scan_read_fail: u64 = 0;
-        // 本线路的"已标记"判定：线路一认后缀标记，线路二认共享前缀
-        let is_marked = |aumid: &str| match self.strategy {
-            WatchStrategy::Ungroup => aumid.contains(appid::SUFFIX_MARKER),
+        // 本线路的"已标记"判定：线路二认共享前缀；线路一走严格判定
+        // （任务 47，审查 K-①：终扫处有真实 HWND——标记 + 合法 hex +
+        // HWND 一致，`contains` 粗判会把恰含 "~TBG~w" 字样的原生 AUMID
+        // 误计为 alive_marked）
+        let is_marked = |aumid: &str, hwnd: HWND| match self.strategy {
+            WatchStrategy::Ungroup => appid::strip_suffix(aumid, hwnd).is_some(),
             WatchStrategy::Group => appid::is_group_aumid(aumid),
         };
         for hwnd in winutil::enum_top_level_windows().unwrap_or_default() {
             let key = hwnd.0 as usize;
-            let was_handled = self.handled.contains(&key);
+            let was_handled = self.handled.contains_key(&key);
+            // 任务 50（审查 H）：reverted 口径 = 本会话真实写入成功的
+            // 窗口（rewritten 集）——跳过类（cross-line / shell /
+            // already-marked）不再误报为 "app rewrote its AUMID"
+            let was_rewritten = self.rewritten.contains(&key);
             let is_new = !self.baseline.contains(&key);
             if !was_handled && !is_new {
                 // 启动时已存在且本会话未处理（启动扫判非应用窗口后一直
@@ -753,9 +887,9 @@ impl WatcherState {
                     continue;
                 }
             };
-            if is_marked(&aumid) {
+            if is_marked(&aumid, hwnd) {
                 alive_marked += 1;
-            } else if was_handled {
+            } else if was_rewritten {
                 reverted.push(format!("{} aumid={:?}", fmt_window(hwnd), aumid));
             } else if is_new
                 && winutil::is_app_window(hwnd)
@@ -833,8 +967,13 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
         }
     }
 
-    // 任务 20：环形日志（--log，默认关）；只记关键事件，256 KiB 上限
-    let ring = RingLog::open(opts.ring_log);
+    // 任务 20：环形日志（--log，默认关）；只记关键事件，256 KiB 上限。
+    // 任务 40（审查 Q/R）：后台模式恒开——stdout 已归 NUL，环形日志是
+    // 后台实例唯一的事件轨迹（且有 256 KiB 截半上限，替代旧的无界
+    // tbg-background.log stdout 重定向）。
+    // 任务 42（审查 P）：安静模式（交互菜单）恒开——逐窗口事件行从
+    // stdout 转入环形日志（菜单 UI 不被冲刷，事件仍可完整追溯）。
+    let ring = RingLog::open(opts.ring_log || opts.background || opts.quiet);
     ring.log(&format!(
         "watch start: strategy={} group={:?} duration={:?} dry_run={}",
         if matches!(opts.strategy, WatchStrategy::Ungroup) {
@@ -849,6 +988,34 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     if health.tripped {
         ring.log("circuit breaker tripped: autostart uninstalled");
     }
+
+    // 任务 49（审查 P3-M）：watch 单实例互斥——同线路（+组名）双开
+    // 互相打架（同批窗口改写互冲 / 统计污染 / shell 重启重复重扫），
+    // 后启动者拒绝并指明停止途径。守卫持有至 run 返回（线程结束/
+    // 进程退出自动释放）。与映射表互斥（Global+SID）正交：ungroup
+    // watch 不写表不持 MapMutex，但同线路双开仍拒。
+    let strategy_name =
+        if matches!(opts.strategy, WatchStrategy::Ungroup) { "ungroup" } else { "group" };
+    let _watch_mutex =
+        crate::singleinstance::WatchMutex::acquire(strategy_name, opts.group_name.as_deref())?;
+
+    // 任务 37（审查 D）：后台模式的命名停止事件——`tbg-lite stop` 打开
+    // `Local\tbg-lite.stop.<pid>` 置位，消息泵每 ≤1s 轮询到即优雅退出。
+    // 创建失败只告警（stop 命令退化为超时后硬杀，仍可用）。
+    let stop_event = if opts.background {
+        match crate::watchpid::StopEvent::create() {
+            Some(ev) => Some(ev),
+            None => {
+                eprintln!(
+                    "watch: warning: cannot create the stop event — 'tbg-lite stop' will fall back to terminate"
+                );
+                ring.log("stop event create failed (stop command falls back to terminate)");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // AUMID 读写（IPropertyStore）要求本线程已初始化 COM
     let _com = winutil::ComGuard::init()?;
@@ -877,8 +1044,9 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
 
     // 1. 线程本地状态先行就位（回调里 if-let 判空，绝不 panic）。
     //    注意：启动扫存量必须在钩子安装之后做，见下方第 3 步。
+    //    任务 42（P）：WatcherState 持有 ring 副本（quiet 模式事件行出口）。
     WATCHER.with(|cell| {
-        *cell.borrow_mut() = Some(WatcherState::new(&opts, group_value, map));
+        *cell.borrow_mut() = Some(WatcherState::new(&opts, group_value, map, ring.clone()));
     });
 
     // 2. 安装 winevent 钩子（零注入：WINEVENT_OUTOFCONTEXT 回调只在本进程执行）。
@@ -906,46 +1074,50 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
         hooks.push(h);
     }
 
-    println!("tbg-lite watch (task 6/8/13/24): SetWinEventHook CREATE/SHOW/NAMECHANGE/DESTROY, out-of-context, skip-own-process");
-    println!("strategy : {}", opts.strategy.label());
-    if ring.enabled() {
-        println!(
-            "log      : ring log enabled (%LOCALAPPDATA%\\tbg-lite\\{}), 256 KiB cap (task 20)",
-            crate::ringlog::LOG_FILE_NAME
-        );
-    }
-    println!("startup  : pre-existing app windows are rewritten at launch (task 13: enabling = ungroup everything)");
-    if matches!(opts.strategy, WatchStrategy::Group) {
-        println!(
-            "group    : every candidate window (incl. pre-existing) gets the shared AUMID {group_display:?}"
-        );
-        println!(
-            "restore  : originals persisted to {} (in %LOCALAPPDATA%\\tbg-lite) for `restore`",
-            crate::restoremap::MAP_FILE_NAME
-        );
-    }
-    println!("note: DESTROY hook is bookkeeping only (tracked-window cleanup)");
-    println!("reassert : markers lost to app/shell rewrites are re-applied (task 28: NAMECHANGE check + 5s periodic verify)");
-    if opts.duration.is_zero() {
-        if opts.stop.is_some() {
-            // 任务 14：菜单模式——由停止标志优雅退出（无需 Ctrl+C）
-            println!("duration: until stopped from the interactive menu (graceful stop: hooks removed + stats printed)");
-        } else {
-            println!("duration: until Ctrl+C (hard exit, no stats printed)");
+    // 任务 42（P）：安静模式（交互菜单）不打启动横幅——~20 行横幅与
+    // 逐窗口事件流一样会冲刷菜单 UI；信息浓缩为 summary 行（启动扫
+    // 统计在 sweep 后打印）与环形日志。CLI 模式横幅原样。
+    if !opts.quiet {
+        println!("tbg-lite watch (task 6/8/13/24): SetWinEventHook CREATE/SHOW/NAMECHANGE/DESTROY, out-of-context, skip-own-process");
+        println!("strategy : {}", opts.strategy.label());
+        if ring.enabled() {
+            println!(
+                "log      : ring log enabled (%LOCALAPPDATA%\\tbg-lite\\{}), 256 KiB cap (task 20)",
+                crate::ringlog::LOG_FILE_NAME
+            );
         }
-    } else {
-        println!(
-            "duration: {:?} (Ctrl+C = hard exit without stats)",
-            opts.duration
-        );
+        println!("startup  : pre-existing app windows are rewritten at launch (task 13: enabling = ungroup everything)");
+        if matches!(opts.strategy, WatchStrategy::Group) {
+            println!(
+                "group    : every candidate window (incl. pre-existing) gets the shared AUMID {group_display:?}"
+            );
+            println!(
+                "restore  : originals persisted to {} (in %LOCALAPPDATA%\\tbg-lite) for `restore`",
+                crate::restoremap::MAP_FILE_NAME
+            );
+        }
+        println!("note: DESTROY hook is bookkeeping only (tracked-window cleanup)");
+        println!("reassert : markers lost to app/shell rewrites are re-applied (task 28: NAMECHANGE check + 5s periodic verify)");
+        if opts.duration.is_zero() {
+            if opts.stop.is_some() {
+                // 任务 14：菜单模式——由停止标志优雅退出（无需 Ctrl+C）
+                println!("duration: until stopped from the interactive menu (graceful stop: hooks removed + stats printed)");
+            } else {
+                // 任务 34（E）：CLI 常驻——Ctrl+C 优雅退出（统计 + 收尾），
+                // 第二次信号才硬杀
+                println!("duration: until Ctrl+C (graceful stop: stats printed; press Ctrl+C twice to hard-kill)");
+            }
+        } else {
+            println!("duration: {:?} (Ctrl+C = graceful stop with stats)", opts.duration);
+        }
+        if opts.dry_run {
+            println!("mode: dry-run (no AUMID writes)");
+        }
+        if opts.verbose {
+            println!("mode: verbose skips");
+        }
+        println!();
     }
-    if opts.dry_run {
-        println!("mode: dry-run (no AUMID writes)");
-    }
-    if opts.verbose {
-        println!("mode: verbose skips");
-    }
-    println!();
 
     // 3. 启动扫存量（任务 13）：把已存在的应用窗口也按当前线路改写
     //    （对齐 mod 默认"开启即全量取消分组"）。必须在钩子安装之后执行：
@@ -969,13 +1141,31 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     }
     ring.log("startup sweep done");
 
+    // 任务 37（审查 D）：后台实例全面就绪（互斥/表/钩子/启动扫全部
+    // 通过，此后只剩正常退出路径）——登记 tbg-watch.tsv 供 `stop` /
+    // `status` 发现本实例。早退路径不经过这里，不会留下陈旧登记；
+    // 崩溃/强杀残留由 stop/status 检测死 PID 回收。登记失败不阻断。
+    if opts.background {
+        match crate::watchpid::register(strategy_name, opts.group_name.as_deref()) {
+            Ok(()) => ring.log("background watch registered (tbg-watch.tsv)"),
+            Err(e) => {
+                eprintln!("watch: warning: cannot register the background watch entry: {e}");
+                ring.log(&format!("watch registration failed: {e}"));
+            }
+        }
+    }
+
     // 4. 消息泵：winevent 回调在 PeekMessage 检索期间由系统调用；
     //    MsgWaitForMultipleObjectsEx 让消息一到就醒来（压测时延观察更真实）
-    //    任务 20：常驻模式（--duration 0 且无停止标志）下 wait 封顶 2s
-    //    （原为 INFINITE）——宿主以 2s 级轮询 explorer PID，重启即全量
-    //    重扫重标记；Ctrl+C 硬杀行为不变
+    //    任务 20：常驻模式（--duration 0）下 wait 封顶 1s（原 2s/INFINITE）
+    //    ——2s 级轮询 explorer PID 重启重扫（last_shell_poll 独立节拍）；
+    //    任务 34：控制台停止信号同享 ≤1s 轮询延迟
     let deadline = (!opts.duration.is_zero()).then(|| Instant::now() + opts.duration);
     let mut stopped_by_request = false;
+    // 任务 34/37（E/S/D）：停止来源区分——菜单停止标志 / 控制台信号 /
+    // `stop` 命令，仅影响退出提示文案
+    let mut stopped_from_console = false;
+    let mut stopped_by_stop_cmd = false;
     let mut msg = MSG::default();
     // 任务 20：explorer 重启监视（GetShellWindow → 其属主进程 PID）。
     // 初始 None（watch 启动时无 shell，如 CI 探针场景）→ 首次见到 Some
@@ -985,6 +1175,10 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     let mut last_shell_poll = Instant::now();
     // 任务 28：回写对抗的周期复核节拍（5s；NAMECHANGE 入口之外的兜底）
     let mut last_reassert_poll = Instant::now();
+    // 任务 33（P0-B）：熔断心跳节拍——每 5s 原子刷 health 文件的
+    // `running` 行，开机死循环判定以“心跳 − start”为存活时长，
+    // 与两次开机的间隔无关（见 health.rs 模块注释）
+    let mut last_health_beat = Instant::now();
     loop {
         // 任务 14：菜单模式的停止标志——置位即优雅退出（摘钩 + 终扫 +
         // 统计，见循环后的公共退出路径）。启动扫存量在进泵前无条件跑完，
@@ -992,6 +1186,23 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
         if let Some(flag) = &opts.stop {
             if flag.load(Ordering::Relaxed) {
                 stopped_by_request = true;
+                break;
+            }
+        }
+        // 任务 34（E/S）：控制台信号（Ctrl+C/Ctrl+Break/关窗/注销/
+        // 关机）——console.rs 处理器置位后同样走优雅退出（摘钩 + 终扫
+        // 统计 + health end_clean），取代原先的硬杀（无统计且 30s 内
+        // 反复 Ctrl+C 会误累计熔断）。消息泵至多 1s 醒一次轮询此标志。
+        if crate::console::stop_requested() {
+            stopped_by_request = true;
+            stopped_from_console = true;
+            break;
+        }
+        // 任务 37（D）：`tbg-lite stop` 的命名事件——同一优雅退出路径
+        if let Some(ev) = &stop_event {
+            if ev.signaled() {
+                stopped_by_request = true;
+                stopped_by_stop_cmd = true;
                 break;
             }
         }
@@ -1009,16 +1220,10 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
                 // 理论忙转。每秒醒一次检查 deadline，成本可忽略
                 remain.as_millis().min(1000) as u32
             }
-            // 无 deadline（常驻）：菜单模式（有停止标志）→ 1s 轮询标志；
-            // CLI 参数模式 → 2s 轮询 explorer PID（任务 20，原 INFINITE；
-            // Ctrl+C 强杀行为不变）
-            None => {
-                if opts.stop.is_some() {
-                    1000
-                } else {
-                    2000
-                }
-            }
+            // 无 deadline（常驻）：1s 轮询停止标志（菜单标志 / 任务 34
+            // 控制台信号共用——优雅退出延迟 ≤1s）；explorer PID 轮询有
+            // 自己的 2s 节拍（last_shell_poll），不受此封顶影响
+            None => 1000,
         };
         unsafe {
             let _ = MsgWaitForMultipleObjectsEx(None, wait_ms, QS_ALLINPUT, MWMO_INPUTAVAILABLE);
@@ -1032,10 +1237,18 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
             let cur = current_shell_pid();
             match (last_shell_pid, cur) {
                 (Some(prev), Some(cur_pid)) if cur_pid != prev => {
-                    // shell 重启：全量重扫重标记（窗口属性可能丢失，幂等补标）
-                    println!(
-                        "watch: shell restart detected (task 20): explorer pid {prev} -> {cur_pid}; re-sweeping all windows"
-                    );
+                    // shell 重启：全量重扫重标记（窗口属性可能丢失，幂等补标）。
+                    // 任务 42（P）：安静模式不打 stdout（防冲刷菜单 UI），
+                    // 环形日志照记；重扫统计 summary 行保留 stdout
+                    if opts.quiet {
+                        ring.log(&format!(
+                            "shell restart detected (task 20): explorer pid {prev} -> {cur_pid}; re-sweeping"
+                        ));
+                    } else {
+                        println!(
+                            "watch: shell restart detected (task 20): explorer pid {prev} -> {cur_pid}; re-sweeping all windows"
+                        );
+                    }
                     ring.log(&format!("shell restart: explorer pid {prev} -> {cur_pid}"));
                     WATCHER.with(|cell| {
                         if let Some(state) = cell.borrow_mut().as_mut() {
@@ -1065,11 +1278,25 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
                 }
             });
         }
+        // 任务 33（P0-B）：熔断心跳——与回写复核同节拍独立计数，写失败
+        // 静默（health 内部尽力而为）
+        if last_health_beat.elapsed() >= Duration::from_secs(health::HEARTBEAT_SECS) {
+            last_health_beat = Instant::now();
+            health.heartbeat();
+        }
     }
 
     if stopped_by_request {
         println!();
-        println!("watch: stop requested (task 14) — removing hooks and running the final scan");
+        if stopped_from_console {
+            // 任务 34（E/S）：控制台信号（Ctrl+C/Break/关窗/注销/关机）
+            println!("watch: console stop signal (task 34) — removing hooks and running the final scan");
+        } else if stopped_by_stop_cmd {
+            // 任务 37（D）：`tbg-lite stop` 命令
+            println!("watch: stop requested via 'tbg-lite stop' (task 37) — removing hooks and running the final scan");
+        } else {
+            println!("watch: stop requested (task 14) — removing hooks and running the final scan");
+        }
     }
 
     // 5. 摘钩子
@@ -1090,7 +1317,14 @@ pub(crate) fn run(opts: WatchOptions) -> Result<(), String> {
     // + 环形日志收尾。到不了这里的退出（崩溃/强杀/早退 Err）即异常退出，
     // 下一轮 begin 据此累计熔断计数
     health.end_clean();
-    ring.log("watch stop (graceful)");
+    // 任务 37（D）：后台实例自清登记（仅当登记仍属于本进程——防误删
+    // 后启动的新实例）；stop_event 由 Drop 关闭句柄
+    if opts.background {
+        crate::watchpid::clear_if_owned();
+        ring.log("watch stop (graceful, background entry cleared)");
+    } else {
+        ring.log("watch stop (graceful)");
+    }
     Ok(())
 }
 

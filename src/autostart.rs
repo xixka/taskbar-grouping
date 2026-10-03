@@ -215,8 +215,19 @@ pub(crate) fn read_command() -> Result<Option<String>, String> {
 }
 
 /// 写入自启命令行（REG_SZ）。重装覆盖，返回旧值（若有）。
+/// 任务 46（审查 P2-I，2026-09-25）：前置读失败（值类型异常/损坏）
+/// 不再阻断覆盖写——按 `New` 处理并附 stderr 注记；读取只为展示与
+/// New/Replaced 判别。
 pub(crate) fn install(command: &str) -> Result<InstallOutcome, String> {
-    let previous = read_command()?;
+    let previous = match read_command() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!(
+                "autostart: warning: previous value unreadable ({e}) — installing over it"
+            );
+            None
+        }
+    };
     unsafe {
         let subkey = wide(RUN_SUBKEY);
         let name = wide(VALUE_NAME);
@@ -256,10 +267,15 @@ pub(crate) fn install(command: &str) -> Result<InstallOutcome, String> {
 }
 
 /// 删除自启项。值不存在 → `Ok(NotInstalled)`（幂等，不算错误）。
+/// 任务 46（审查 P2-I，2026-09-25）：**读取失败不再阻断卸载**——注册表
+/// 值类型异常（非 REG_SZ / 数据损坏）恰恰是最需要被清理的状态，原实现
+/// 依赖 `read_command` 成功会把这类值变成"删不掉的钉子户"。旧值仅用于
+/// 展示，读不出降级为占位文案；读侧确认"值不存在"仍走幂等快速路径。
 pub(crate) fn uninstall() -> Result<UninstallOutcome, String> {
-    let previous = read_command()?;
-    let Some(previous) = previous else {
-        return Ok(UninstallOutcome::NotInstalled);
+    let previous = match read_command() {
+        Ok(None) => return Ok(UninstallOutcome::NotInstalled),
+        Ok(Some(prev)) => prev,
+        Err(e) => format!("<unreadable: {e}>"),
     };
     unsafe {
         let subkey = wide(RUN_SUBKEY);

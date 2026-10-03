@@ -26,6 +26,8 @@ windows = { version = "0.58", features = [
     "Win32_Security",                # SECURITY_ATTRIBUTES（CreateMutexW 签名引用，任务 22）
     "Win32_System_Registry",         # HKCU Run 开机自启（任务 19：RegCreateKeyExW 等）
     "Win32_Globalization",           # GetUserDefaultUILanguage 菜单语言自动检测（任务 29）
+    "Win32_System_Console",          # 控制台信号/代码页/宽字符 I/O（任务 34，审查 E/S/J）
+    "Win32_Security_Authorization",  # ConvertSidToStringSidW 互斥体 SID 化（任务 48，审查 G）
 ] }
 
 # §0-7（2026-10-01）：启动时 Win11-only 提示（RtlGetVersion 读真实 build，

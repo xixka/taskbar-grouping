@@ -25,6 +25,10 @@ pub(crate) const LOG_FILE_NAME: &str = "tbg.log";
 /// 文件上限：超过即截半（保留后半段）。
 const MAX_BYTES: u64 = 256 * 1024;
 
+/// Clone（任务 42，审查 P）：安静模式下 `WatcherState` 持有一份副本
+/// 作为逐窗口事件行的出口（`Option<PathBuf>` 廉值克隆，共享同一日志
+/// 文件与写路径语义）。
+#[derive(Clone)]
 pub(crate) struct RingLog {
     /// None = 未启用（默认）。启用但数据目录不可用时也为 None（告警一次）。
     path: Option<PathBuf>,
@@ -69,15 +73,15 @@ impl RingLog {
             let _ = f.write_all(line.as_bytes());
             let _ = f.flush();
         }
-        // 截半：超上限 → 保留后半段（tmp + rename 原子替换）
+        // 截半：超上限 → 保留后半段。任务 43（审查 O）：复用
+        // `restoremap::atomic_write`（tmp + sync + rename 原子替换，与
+        // 还原表/health/watchpid 同一纪律）——截半窗口期崩溃不再可能
+        // 留下半行残文/空文件
         if let Ok(md) = fs::metadata(path) {
             if md.len() > MAX_BYTES {
                 if let Ok(content) = fs::read_to_string(path) {
                     let keep = trim_keep_tail(&content, (content.len() as u64) / 2);
-                    let tmp = PathBuf::from(format!("{}.tmp", path.display()));
-                    if fs::write(&tmp, keep).is_ok() {
-                        let _ = fs::rename(&tmp, path);
-                    }
+                    let _ = crate::restoremap::atomic_write(path, keep);
                 }
             }
         }
@@ -97,6 +101,12 @@ pub(crate) fn trim_keep_tail(content: &str, target_start: u64) -> &str {
         // 越界（极端输入）：整段保留，不丢日志
         return content;
     }
+    // 审查 P0-A（2026-09-25）：中点可能落在 UTF-8 多字节字符中间——
+    // `content[start..]` 在非字符边界上切片会 panic（release
+    // panic=abort 直接杀进程）。先向前对齐到最近的字符边界（前移
+    // 至多 3 字节，不影响“保留后半段”的量级语义）；对齐后仍可能
+    // 落在行中间，走下方“丢半行”路径。
+    let start = snap_to_char_boundary(content, start);
     if start == 0 || content.as_bytes()[start - 1] == b'\n' {
         // 恰在行边界：从该行行首保留
         return &content[start..];
@@ -105,6 +115,14 @@ pub(crate) fn trim_keep_tail(content: &str, target_start: u64) -> &str {
         Some(i) => &content[start + i + 1..],
         None => content,
     }
+}
+
+/// `i` 不在 UTF-8 字符边界时前移到最近边界（`i >= len` 时原样返回）。
+fn snap_to_char_boundary(s: &str, mut i: usize) -> usize {
+    while i < s.len() && !s.is_char_boundary(i) {
+        i += 1;
+    }
+    i
 }
 
 fn unix_now() -> u64 {
@@ -140,5 +158,42 @@ mod tests {
         // 单行超长无换行：宁多勿丢
         assert_eq!(trim_keep_tail("abcdefgh", 3), "abcdefgh");
         assert_eq!(trim_keep_tail("", 0), "");
+    }
+
+    #[test]
+    fn trim_mid_utf8_multibyte_char_does_not_panic() {
+        // 审查报告 P0-A 实证用例：44 B 日志，字节中点 22 恰落在 `字`
+        // （三字节 UTF-8 字符）的最后一字节——非字符边界。原实现
+        // `content[22..]` 直接 panic（release panic=abort 杀进程）。
+        let content = format!("{}{}{}", "a\n".repeat(7), "中文字\n", "b\n".repeat(10));
+        assert_eq!(content.len(), 44);
+        assert!(!content.is_char_boundary(22));
+        // 修复后：对齐到 23（\n），丢半行 → 保留全部 b 行，不 panic
+        assert_eq!(trim_keep_tail(&content, 22), "b\n".repeat(10));
+    }
+
+    #[test]
+    fn trim_mid_emoji_char_snaps_forward() {
+        // 代理对表情（4 字节）内部截半：对齐到行尾 \n 后从下一行保留
+        let content = format!("a\n😀\n{}", "c\n".repeat(3));
+        assert_eq!(content.len(), 13);
+        // 4 = 😀 第 3 字节（非边界）→ snap 到 6（\n）→ 丢半行 → c 行全保留
+        assert_eq!(trim_keep_tail(&content, 4), "c\n".repeat(3));
+        // 3 = 😀 第 2 字节（非边界）→ 同上
+        assert_eq!(trim_keep_tail(&content, 3), "c\n".repeat(3));
+        // 6 = \n 本身（边界）→ 前一字节非 \n → find 路径 → 同样保留 c 行
+        assert_eq!(trim_keep_tail(&content, 6), "c\n".repeat(3));
+    }
+
+    #[test]
+    fn trim_cjk_line_boundary_cases() {
+        // "aa\n中\nbb\n"：len=10。5 = `中` 第 3 字节 → snap 到 6（\n）
+        // → find 路径 → 保留 "bb\n"
+        let content = "aa\n中\nbb\n";
+        assert_eq!(trim_keep_tail(content, 5), "bb\n");
+        // 7 = b 行行首（前一字节是 \n）→ 行边界路径 → 保留 "bb\n"
+        assert_eq!(trim_keep_tail(content, 7), "bb\n");
+        // 3 = `中` 行行首（前一字节是 \n）→ 行边界路径 → 从该行保留
+        assert_eq!(trim_keep_tail(content, 3), "中\nbb\n");
     }
 }

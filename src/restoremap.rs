@@ -63,23 +63,30 @@ fn exe_dir() -> Result<PathBuf, String> {
 }
 
 fn tmp_path(path: &Path) -> PathBuf {
-    PathBuf::from(format!("{}.tmp", path.display()))
+    // 任务 43（审查 N）：OsString 拼接（不经 display() 的有损往返，
+    // 非 UTF-8 路径字节原样保留）；随 atomic_write 提升为唯一临时文件
+    // 构造点（ringlog 截半也复用）
+    let mut s = path.as_os_str().to_os_string();
+    s.push(".tmp");
+    PathBuf::from(s)
 }
 
 /// 原子写（审计 BUG-03）：同目录临时文件 + fsync + rename 原子替换。
-fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
+/// 任务 33（审查 P0-B/O）：提升为 `pub(crate)` 供 health 状态文件复用
+/// （熔断心跳每 5s 重写一次，同样不能落半行残文）；错误文案保持通用。
+pub(crate) fn atomic_write(path: &Path, content: &str) -> Result<(), String> {
     let tmp = tmp_path(path);
     let mut f = File::create(&tmp)
-        .map_err(|e| format!("restore map tmp create failed ({}): {e}", tmp.display()))?;
+        .map_err(|e| format!("atomic write: tmp create failed ({}): {e}", tmp.display()))?;
     f.write_all(content.as_bytes())
-        .map_err(|e| format!("restore map tmp write failed: {e}"))?;
+        .map_err(|e| format!("atomic write: tmp write failed: {e}"))?;
     // 落盘完成后再替换主文件，崩溃窗口期内主表保持上一个完整版本
     f.sync_all()
-        .map_err(|e| format!("restore map tmp sync failed: {e}"))?;
+        .map_err(|e| format!("atomic write: tmp sync failed: {e}"))?;
     drop(f);
     fs::rename(&tmp, path).map_err(|e| {
         format!(
-            "restore map rename failed ({} -> {}): {e}",
+            "atomic write: rename failed ({} -> {}): {e}",
             tmp.display(),
             path.display()
         )
@@ -96,9 +103,18 @@ fn serialize(entries: &BTreeMap<usize, (String, String)>) -> String {
 }
 
 /// 解析表文本（v1 表头行与 v0 无表头格式均兼容；`#` 开头行跳过）。
+///
+/// 任务 36（审查 P1-F）读侧兜底：先归一化 `\r\n` / 裸 `\r` 行尾
+/// （Rust `str::lines()` 本就剥离行尾 `\r`，此处把老式 `\r` 分行也
+/// 拉回 `\n`，外部编辑过的表不至于按损坏拒载）。
 fn parse(text: &str) -> Result<BTreeMap<usize, (String, String)>, String> {
+    let normalized = if text.contains('\r') {
+        text.replace("\r\n", "\n").replace('\r', "\n")
+    } else {
+        text.to_string()
+    };
     let mut entries = BTreeMap::new();
-    for (i, line) in text.lines().enumerate() {
+    for (i, line) in normalized.lines().enumerate() {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
@@ -144,9 +160,22 @@ impl RestoreMap {
     }
 
     /// 记录一次线路二改写（改写 AUMID 之前调用，落盘成功后才真正写入）。
-    pub(crate) fn record(&mut self, hwnd: usize, group_value: &str, original: &str) {
+    ///
+    /// 任务 36（审查 P1-F，2026-09-25）：`original`/`group_value` 含
+    /// `\r`/`\n` 时**拒绝记录**并返回 false——TSV 行式格式下换行会自毁
+    /// 整表（下一轮 `load` 按损坏拒载，线路二全部停摆，其余窗口的原值
+    /// 全部不可还原）。调用方（`apply_group`）据此跳过该窗口改写并计
+    /// `write_fail`；`\t` 不拦（`parse` 的 `splitn(3, '\t')` 只切前三
+    /// 列，第三列原值整体保留，不构成注入面）。
+    pub(crate) fn record(&mut self, hwnd: usize, group_value: &str, original: &str) -> bool {
+        if original.contains('\r') || original.contains('\n')
+            || group_value.contains('\r') || group_value.contains('\n')
+        {
+            return false;
+        }
         self.entries
             .insert(hwnd, (group_value.to_string(), original.to_string()));
+        true
     }
 
     /// 删除条目（窗口销毁 / 改写失败回滚时）。返回条目是否先前存在。
@@ -364,6 +393,58 @@ mod tests {
         assert_eq!(m.len(), 1);
         assert_eq!(m.peek(0x20176, "TBG.Group.work").unwrap(), "App.1");
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn record_rejects_line_breaks_in_values() {
+        // 任务 36（P1-F）：原生/共享 AUMID 含 \r 或 \n → 拒绝记录
+        // （TSV 行式格式下换行自毁整表）；\t 不拦（splitn(3) 第三列
+        // 整体保留，无注入面）
+        let dir = test_dir("record-guard");
+        let mut m = RestoreMap::load(&dir).unwrap();
+        assert!(!m.record(0x1, "TBG.Group.g", "App.with\nnewline"));
+        assert!(!m.record(0x2, "TBG.Group.g", "App.with\rcr"));
+        assert!(!m.record(0x3, "TBG.Group.g\r", "App.3"));
+        assert!(!m.record(0x4, "TBG.Group\ng", "App.4"));
+        assert!(m.record(0x5, "TBG.Group.g", "App.with\ttab"));
+        assert_eq!(m.len(), 1); // 只有 0x5 入表
+        assert!(m.peek(0x1, "TBG.Group.g").is_none());
+        // 拒绝的条目不应被落盘
+        m.save().unwrap();
+        let text = fs::read_to_string(dir.join(MAP_FILE_NAME)).unwrap();
+        assert!(!text.contains('\r'));
+        assert!(!text.contains("newline"));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn parse_tolerates_crlf_and_bare_cr_line_endings() {
+        // 任务 36（P1-F）读侧兜底：CRLF 行尾（str::lines 本就剥离）与
+        // 裸 \r 分行（归一化后可解析）都能读
+        let dir = test_dir("crlf");
+        fs::write(
+            dir.join(MAP_FILE_NAME),
+            "# tbg-restore.tsv v1\r\nAB\tTBG.Group.work\tApp.1\r\nCD\tTBG.Group.work\t\r\n",
+        )
+        .unwrap();
+        let m = RestoreMap::load(&dir).unwrap();
+        assert_eq!(m.len(), 2);
+        assert_eq!(m.peek(0xAB, "TBG.Group.work").unwrap(), "App.1");
+        assert_eq!(m.peek(0xCD, "TBG.Group.work").unwrap(), "");
+
+        // 裸 \r 分行（老式编辑器/损坏形态）：归一化后按两行解析
+        let dir2 = test_dir("bare-cr");
+        fs::write(
+            dir2.join(MAP_FILE_NAME),
+            "# tbg-restore.tsv v1\rAB\tTBG.Group.work\tApp.1\rCD\tTBG.Group.work\t\r",
+        )
+        .unwrap();
+        let m2 = RestoreMap::load(&dir2).unwrap();
+        assert_eq!(m2.len(), 2);
+        assert_eq!(m2.peek(0xAB, "TBG.Group.work").unwrap(), "App.1");
+        assert_eq!(m2.peek(0xCD, "TBG.Group.work").unwrap(), "");
+        let _ = fs::remove_dir_all(&dir);
+        let _ = fs::remove_dir_all(&dir2);
     }
 
     #[test]

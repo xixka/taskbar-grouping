@@ -1,11 +1,12 @@
 //! 窗口与字符串工具（任务 5 起使用）。
 
-use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RPC_E_CHANGED_MODE};
+use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RPC_E_CHANGED_MODE, WPARAM};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
 use windows::Win32::System::Com::{CoInitializeEx, CoUninitialize, COINIT_APARTMENTTHREADED};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetAncestor, GetClassNameW, GetWindowLongW, GetWindowTextW,
-    GetWindowThreadProcessId, IsWindowVisible, GA_ROOT, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
+    GetWindowThreadProcessId, IsWindowVisible, SendMessageTimeoutW, SMTO_ABORTIFHUNG, WM_GETTEXT,
+    GA_ROOT, GWL_EXSTYLE, WS_EX_TOOLWINDOW,
 };
 
 /// 把 API 写入 `buf` 的前 `len` 个 UTF-16 码元转成 `String`。
@@ -56,11 +57,52 @@ impl Drop for ComGuard {
     }
 }
 
+/// 读取窗口标题。
+///
+/// 任务 35（审查 P1-C，2026-09-25）：`GetWindowTextW` 对**跨进程**窗口
+/// 是同步 `SendMessage(WM_GETTEXT)`——目标窗口无响应时阻塞调用线程
+/// （直到系统 ghosting 代答，约 5s/窗），watch 单线程消息泵、菜单
+/// `[3]`/`[0]` 的 join、`status`/`inspect` 都会被挂起窗口卡住。
+///
+/// 改用 `SendMessageTimeoutW`（`SMTO_ABORTIFHUNG` + 100ms 熔断）：
+/// - 健康窗口路径无差别（正常 <1ms 返回）；
+/// - 挂起/超时窗口 100ms 内返回空串 → 调用方判为无标题、该轮跳过
+///   （与既有 "cloaked/无标题跳过重试" 语义一致：后续 SHOW/NAMECHANGE
+///   事件会再评估，无永久漏标）；
+/// - 本进程窗口仍走 `GetWindowTextW` 快路径（同进程不产生跨进程
+///   消息，且避免钩子回调线程重入风险）。
 pub(crate) unsafe fn window_text(hwnd: HWND) -> String {
+    let mut owner_pid: u32 = 0;
+    GetWindowThreadProcessId(hwnd, Some(&mut owner_pid));
+    if owner_pid == std::process::id() {
+        let mut buf = [0u16; 512];
+        let n = GetWindowTextW(hwnd, &mut buf[..]);
+        return wide_buf_to_string(&buf, n);
+    }
     let mut buf = [0u16; 512];
-    let n = GetWindowTextW(hwnd, &mut buf[..]);
-    wide_buf_to_string(&buf, n)
+    let res = SendMessageTimeoutW(
+        hwnd,
+        WM_GETTEXT,
+        // wparam：缓冲容量（含 NUL，按 WM_GETTEXT 契约）
+        WPARAM((buf.len() - 1) as usize),
+        LPARAM(buf.as_mut_ptr() as isize),
+        // ABORTIFHUNG：窗口已被系统判定挂起时立即返回，不等 100ms
+        SMTO_ABORTIFHUNG,
+        TEXT_TIMEOUT_MS,
+        None,
+    );
+    // LRESULT 新类型（isize）：0 = 失败 / 超时 / 挂起（视作无标题，
+    // 跳过该窗口本轮评估）；WM_GETTEXT 成功时 = 拷贝的字符数（不含 NUL）
+    if res.0 <= 0 {
+        return String::new();
+    }
+    // 防御性截断（正常 ≤ 缓冲容量）
+    let n = (res.0 as usize).min(buf.len() - 1);
+    String::from_utf16_lossy(&buf[..n])
 }
+
+/// 跨进程窗口文本的读取超时（毫秒）。见 `window_text`（任务 35）。
+const TEXT_TIMEOUT_MS: u32 = 100;
 
 pub(crate) unsafe fn class_name(hwnd: HWND) -> String {
     let mut buf = [0u16; 256];

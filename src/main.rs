@@ -19,6 +19,7 @@
 
 mod appid;
 mod autostart;
+mod console;
 mod health;
 mod menu;
 mod oscheck;
@@ -26,6 +27,7 @@ mod restoremap;
 mod ringlog;
 mod shortcut;
 mod singleinstance;
+mod watchpid;
 mod winevent;
 mod winutil;
 
@@ -86,13 +88,21 @@ COMMANDS:
                                      for restore)
               --duration <SECS>  run length (default 60; 0 = until stopped:
                                  menu mode exits gracefully via the stop
-                                 flag; CLI mode Ctrl+C is a hard exit)
+                                 flag; CLI mode stops gracefully on the
+                                 first Ctrl+C, hard exit on the second
+                                 (task 34))
               --dry-run          log only, never write AUMID
               --verbose          also log skipped windows with reasons
               --log              ring log to %LOCALAPPDATA%\\tbg-lite\\tbg.log
                                  (task 20, default off; 256 KiB cap,
                                  key events only: start/stop/sweeps/
                                  shell restarts/circuit breaker)
+              --background       detached background mode (task 37/40):
+                                 no console window (FreeConsole; NUL
+                                 stdout/stderr), ring log always on,
+                                 registers tbg-watch.tsv and listens for
+                                 'tbg-lite stop'; used by autostart and
+                                 the menu keep-alive (task 31)
     restore   restore native AppUserModelIDs (docs/plan.md task 7+8):
               line 1 strips the per-window suffix; line 2 looks the
               original value up in tbg-restore.tsv. Windows whose
@@ -116,6 +126,14 @@ COMMANDS:
               'not installed'), marked-window counters per strategy line,
               and the restore map (entries / absent / corrupt). Read-only:
               never creates, migrates or rewrites the map
+              task 37 also reports the background watch instance
+              (pid / strategy / group from tbg-watch.tsv, liveness-checked)
+    stop      stop the background watch (task 37): sends the named stop
+              event — the watch unhooks, runs the final scan, prints
+              stats into the ring log and exits gracefully (≤5s);
+              falls back to terminate on timeout or unreachable event;
+              cleans a stale registration (dead pid) — idempotent, no
+              arguments, exits 0 when nothing is registered
     pin       create a taskbar tile .lnk for a line-2 group (task 16,
               mklnkwaumid-style): the shortcut carries the shared AUMID
               TBG.Group.<NAME> so that windows rewritten by
@@ -157,11 +175,16 @@ fn main() -> ExitCode {
     // panic=abort 下表现为丑陋中止。装 panic hook：管道断裂 → 静默退出 0
     // （`tbg-lite inspect | head -1` 等 CLI 管道惯例）；其他 panic → 单行
     // 报告 + 101（保留可诊断性）。
+    // 任务 45（审查 P3-T，2026-09-25）：panic 现场追加落盘数据目录
+    // `tbg-panic.log`（一行时间戳 + 消息，换行压平）——release
+    // panic=abort 下 watch 线程/菜单整体崩溃只剩 stderr 一闪即逝，
+    // 落盘后重启可查（A 修复后最大 panic 源已消除，此为兜底）。
     std::panic::set_hook(Box::new(|info| {
         let msg = info.to_string();
         if msg.contains("failed printing to stdout") {
             std::process::exit(0);
         }
+        let _ = append_panic_log(&msg);
         eprintln!("tbg-lite: internal error: {msg}");
         std::process::exit(101);
     }));
@@ -169,10 +192,21 @@ fn main() -> ExitCode {
     // 不阻断、不改退出码（详见 src/oscheck.rs 模块注释）。
     oscheck::win11_only_notice();
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // 任务 41（审查 J）：控制台输入/输出代码页 UTF-8 化（尽力而为，
+    // 退出恢复；仅 stdout/stdin 是控制台时动作，管道/CI 不受影响）。
+    // 菜单层输出已走 WriteConsoleW 与代码页无关；此项覆盖技术输出
+    // （watch/inspect 的中文标题行）与控制台中文输入。
+    let _cp_guard = console::utf8_console();
     match args.first().map(String::as_str) {
         // 任务 14（2026-09-22 维护者指示）：无参数启动 → 交互菜单
         // （含退出项，不需要 Ctrl+C）；--help 仍打印本帮助文本
-        None => menu::run(),
+        // 任务 34（S）：菜单会话装控制台信号处理器——关窗/注销时
+        // conhost 默认直接终止进程；置标志后 stdin 读被打断，走 EOF
+        // 优雅路径停 watch 线程并收尾
+        None => {
+            console::install_ctrl_handler();
+            menu::run()
+        }
         Some("-h") | Some("--help") => {
             print!("{HELP}");
             ExitCode::SUCCESS
@@ -188,6 +222,7 @@ fn main() -> ExitCode {
         Some("install") => report(cmd_install(&args[1..])),
         Some("uninstall") => report(cmd_uninstall(&args[1..])),
         Some("status") => report(cmd_status(&args[1..])),
+        Some("stop") => report(cmd_stop(&args[1..])),
         Some("pin") => report(cmd_pin(&args[1..])),
         Some("unpin") => report(cmd_unpin(&args[1..])),
         Some(other) => {
@@ -195,6 +230,25 @@ fn main() -> ExitCode {
             ExitCode::from(2)
         }
     }
+}
+
+/// 任务 45（审查 P3-T）：panic 现场一行落盘（数据目录 tbg-panic.log，
+/// 追加；尽力而为——数据目录不可用时静默）。换行压平为空格保证
+/// 单行可 grep；时间戳 Unix 秒与环形日志同口径。
+fn append_panic_log(msg: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    let dir = restoremap::data_dir().map_err(std::io::Error::other)?;
+    std::fs::create_dir_all(&dir)?;
+    let ts = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let line = format!("[{ts}] panic: {}\n", msg.replace(['\r', '\n'], " "));
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("tbg-panic.log"))?;
+    f.write_all(line.as_bytes())
 }
 
 fn report(r: Result<(), String>) -> ExitCode {
@@ -313,7 +367,14 @@ pub(crate) fn cmd_inspect(args: &[String]) -> Result<(), String> {
                     json_escape(&winutil::class_name(hwnd)),
                     json_escape(&winutil::window_text(hwnd)),
                     aumid_json,
-                    aumid.as_deref().map(|v| v.contains(appid::SUFFIX_MARKER)).unwrap_or(false),
+                    // 任务 47（审查 K-②）：列表模式有真实 HWND——与单窗
+                    // 模式对齐用严格判定（标记+合法hex+HWND 一致），
+                    // contains 粗判会把恰含 "~TBG~w" 字样的原生 AUMID
+                    // 误报为已标记
+                    aumid
+                        .as_deref()
+                        .map(|v| appid::strip_suffix(v, hwnd).is_some())
+                        .unwrap_or(false),
                     aumid.as_deref().map(appid::is_group_aumid).unwrap_or(false)
                 ));
             }
@@ -364,6 +425,7 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     let mut dry_run = false;
     let mut verbose = false;
     let mut ring_log = false;
+    let mut background = false;
     let mut strategy = winevent::WatchStrategy::Ungroup;
     let mut group: Option<String> = None;
     let mut it = args.iter();
@@ -375,6 +437,7 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
                     format!("usage: watch: invalid duration '{v}' (expected seconds)")
                 })?;
             }
+            "--background" => background = true,
             "--strategy" => {
                 let v = next_arg(&mut it, "--strategy")?;
                 strategy = match v.as_str() {
@@ -409,17 +472,33 @@ fn cmd_watch(args: &[String]) -> Result<(), String> {
     if let Some(name) = group_name.as_deref() {
         appid::group_aumid(name).map_err(|e| format!("usage: watch: {e}"))?;
     }
+    // 任务 34（E）：CLI watch 装控制台信号处理器——Ctrl+C/Break/关窗
+    // 由硬杀改为优雅退出（摘钩 + 终扫统计 + health end_clean；第二次
+    // 信号仍立即硬杀）。注册失败不致命，退回默认行为。
+    // 菜单模式的 watch 线程在 menu.rs 入口统一安装（S：关窗优雅收尾）。
+    console::install_ctrl_handler();
+    // 任务 40（Q）：后台模式——在任何输出发生前脱离控制台（stdout/
+    // stderr 归 NUL + FreeConsole），环形日志恒开；见 console.rs 的
+    // 顺序约束说明。任务 37（D）：就绪后登记 PID + 监听 stop 事件。
+    if background {
+        console::detach_console()?;
+    }
     winevent::run(winevent::WatchOptions {
         duration: Duration::from_secs(duration_secs),
         dry_run,
         verbose,
         strategy,
         group_name,
-        // CLI 参数模式：无外部停止标志（--duration 0 = Ctrl+C 强杀，
-        // 原行为不变；优雅退出属菜单模式，任务 14）
+        // CLI 参数模式：无菜单停止标志——停止信号来自控制台处理器
+        // （crate::console，任务 34）或 duration 到点
         stop: None,
-        // 任务 20：--log 环形日志（默认关）
+        // 任务 20：--log 环形日志（默认关；后台模式恒开）
         ring_log,
+        // 任务 37/40（D/Q）：后台模式
+        background,
+        // 任务 42（P）：安静模式仅交互菜单使用；CLI 恒 false（输出
+        // 行为与旧版一致，CI 断言口径不变）
+        quiet: false,
     })
 }
 
@@ -790,6 +869,10 @@ fn cmd_install(args: &[String]) -> Result<(), String> {
     }
     tail.push("--duration".into());
     tail.push("0".into());
+    // 任务 40（审查 Q）：后台标志——登录拉起时不再有常驻可见 conhost
+    // 窗口（FreeConsole 自脱离，黑窗仅一闪）；环形日志恒开承载事件
+    // 轨迹；任务 37：tbg-lite stop 可停
+    tail.push("--background".into());
     let refs: Vec<&str> = tail.iter().map(|s| s.as_str()).collect();
     let command = autostart::build_command(&exe, &refs);
     match autostart::install(&command)? {
@@ -806,7 +889,7 @@ fn cmd_install(args: &[String]) -> Result<(), String> {
     }
     println!("command : {command}");
     println!(
-        "note    : the registered watch runs until stopped (--duration 0); resident-host lifecycle is task 20"
+        "note    : the registered watch runs detached (--background, task 40) until 'tbg-lite stop' or logoff; events go to the ring log"
     );
     Ok(())
 }
@@ -834,6 +917,7 @@ fn cmd_uninstall(args: &[String]) -> Result<(), String> {
 /// 任务 19：状态速览——自启命令（HKCU Run）、双线路标记窗口计数、映射表
 /// 状态。全程只读：注册表只读；窗口 AUMID 只读；映射表走 `restoremap::
 /// status`（不建目录/不迁移/不写文件，审计 BUG-02 红线）。
+/// 任务 37（审查 D）：+ 后台 watch 运行实例（tbg-watch.tsv + 存活检查）。
 fn cmd_status(args: &[String]) -> Result<(), String> {
     if let Some(a) = args.first() {
         return Err(format!("usage: status: unknown argument '{}'", a));
@@ -842,6 +926,29 @@ fn cmd_status(args: &[String]) -> Result<(), String> {
     match autostart::read_command()? {
         Some(cmd) => println!("autostart  : installed — {cmd}"),
         None => println!("autostart  : not installed"),
+    }
+    // 1.5) 后台 watch 实例（任务 37，审查 D：此前分离式保活实例对
+    //     status 完全不可见，用户无从得知它还在跑并持有映射表互斥）
+    match watchpid::read() {
+        Some(info) => {
+            if watchpid::is_running(info.pid) {
+                let group = info
+                    .group
+                    .as_deref()
+                    .map(|g| format!(", group '{g}'"))
+                    .unwrap_or_default();
+                println!(
+                    "watch      : background instance running (pid {}, strategy {}{}, started unix {})",
+                    info.pid, info.strategy, group, info.started
+                );
+            } else {
+                println!(
+                    "watch      : registered background watch (pid {}) is NOT running — run 'tbg-lite stop' to clean the stale entry",
+                    info.pid
+                );
+            }
+        }
+        None => println!("watch      : no background instance registered"),
     }
     // 2) 标记窗口计数（属性存储读取需 COM；只统计任务栏语义的应用窗口）
     {
@@ -888,6 +995,46 @@ fn cmd_status(args: &[String]) -> Result<(), String> {
             }
         }
         Err(e) => println!("restore map: unavailable ({e})"),
+    }
+    Ok(())
+}
+
+/// 任务 37（审查 P1-D）：停止后台 watch（分离式保活实例）。
+///
+/// 背景：任务 31 的 `[0]`→`k` 保活子进程此前无任何停止途径（菜单 [3]
+/// 只停本会话线程）；group 线路后台实例还长期持有映射表互斥，后续
+/// `restore` / group watch 全被拒。
+///
+/// 流程（`watchpid::stop_registered`）：读 `tbg-watch.tsv` 登记 → 存活
+/// 检查（死 PID → 回收陈旧登记）→ 打开 `Local\tbg-lite.stop.<pid>` 置
+/// 位（watch 消息泵 ≤1s 轮询到即摘钩+终扫+end_clean+自清登记）→ 等
+/// 待 ≤5s → 超时才 TerminateProcess（优雅优先，硬杀兜底）。幂等：无
+/// 登记时明确报告、退出 0。
+fn cmd_stop(args: &[String]) -> Result<(), String> {
+    if let Some(a) = args.first() {
+        return Err(format!("usage: stop: unknown argument '{}'", a));
+    }
+    match watchpid::stop_registered() {
+        watchpid::StopResult::NoWatch => {
+            println!("watch: no background instance registered (nothing to stop)");
+        }
+        watchpid::StopResult::StaleCleared { pid } => {
+            println!("watch: registered watch (pid {pid}) is not running — stale entry removed");
+        }
+        watchpid::StopResult::Graceful { pid } => {
+            println!("watch: background watch stopped gracefully (pid {pid})");
+        }
+        watchpid::StopResult::TerminatedNoEvent { pid } => {
+            println!(
+                "watch: stop event not reachable (pid {pid}, old version?) — terminated directly"
+            );
+        }
+        watchpid::StopResult::TerminatedTimeout { pid } => {
+            println!("watch: graceful stop timed out (pid {pid}) — terminated");
+        }
+        watchpid::StopResult::Failed { pid } => {
+            println!("watch: could not stop pid {pid} (terminate failed) — try taskkill /PID {pid}");
+        }
     }
     Ok(())
 }

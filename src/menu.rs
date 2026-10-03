@@ -12,7 +12,10 @@
 //! 自身不初始化 COM——`inspect` / `restore` 动作直接复用 main.rs 的
 //! `cmd_inspect` / `cmd_restore`（内部各自 ComGuard，逐次调用即可）。
 //! stdin 关闭（EOF / 重定向管道写端关闭）→ 视同选择退出（默认不还原），
-//! 保证脚本化/CI 驱动下不会忙转。
+//! 保证脚本化/CI 驱动下不会忙转。任务 34（审查 S）：菜单入口装
+//! `crate::console` 控制台信号处理器——关窗/注销等 conhost 终止事件
+//! 打断 stdin 读走同一条 EOF 优雅路径（Ctrl+C 语义不变，退出主路径
+//! 仍是菜单项 `[0]`）。
 //!
 //! stdin 首行 UTF-8 BOM 容错：Windows 管道写端（如 PowerShell
 //! `Process.StandardInput` 的 StreamWriter）与记事本保存的脚本文件
@@ -25,7 +28,6 @@
 //! 双语化；watch / inspect / restore 技术输出保持英文（CI 断言与文档
 //! 口径）。en-US CI Runner 走 EN 分支，Phase M 菜单流与断言不变。
 
-use std::io::{self, Write};
 use std::process::ExitCode;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -34,6 +36,8 @@ use std::time::Duration;
 
 use windows::Win32::Globalization::GetUserDefaultUILanguage;
 
+use crate::outln;
+use crate::outp;
 use crate::winevent::{self, WatchOptions, WatchStrategy};
 
 /// 一个正在后台运行的 watch 会话。
@@ -73,8 +77,12 @@ fn spawn_watch(strategy: WatchStrategy, group_name: Option<String>) -> WatchSess
             group_name: group_for_thread,
             // 任务 14：菜单模式——外部停止标志（优雅退出）
             stop: Some(stop_flag),
-            // 任务 20：环形日志走 CLI --log 开关；菜单模式默认关
+            // 任务 42（审查 P）：安静模式——事件行/横幅/告警入环形日志
+            // （恒开），菜单 UI 不被冲刷；启动扫 summary 与停止后的
+            // 统计块仍回显到 stdout
+            quiet: true,
             ring_log: false,
+            background: false,
         })
     });
     WatchSession {
@@ -96,19 +104,27 @@ fn is_keep(line: &str) -> bool {
     matches!(line.trim().to_ascii_lowercase().as_str(), "k" | "keep")
 }
 
-/// 任务 31：分离式后台重启 watch 子进程（`[0]` 退出选 `k`）。
+/// 任务 31/37/40：分离式后台重启 watch 子进程（`[0]` 退出选 `k`）。
 ///
-/// **必须在 `stop_and_join` 之后调用**：`Local\tbg-lite.map` 互斥体随
+/// **必须在 `stop_and_join` 之后调用**：映射表互斥体（任务 48 升级为
+/// `Global\tbg-lite.map.<用户SID>`，SID 不可得时回退 `Local\` 前缀）随
 /// watch 线程结束 Drop 释放（group 线路），先停后启保证子进程拿得到
 /// 互斥体（审计 BUG-02 单实例红线）。
 ///
-/// 子进程形态 = 纯 CLI `watch --duration 0`（常驻直至被杀；参数与菜单
-/// 线路同构）。无控制台窗口（CREATE_NO_WINDOW + 独立进程组，不受父
-/// 进程退出/Ctrl+C 影响）；stdout/stderr 追加到
-/// `%LOCALAPPDATA%\tbg-lite\tbg-background.log`——CREATE_NO_WINDOW 的
-/// 隐式 stdout 是无效句柄，`println!` 写失败会 panic 杀死后台进程，必须
-/// 显式给出口（打不开则回退 NUL 设备，丢弃日志但进程存活）。
-fn spawn_detached_watch(strategy: WatchStrategy, group_name: Option<&str>) -> Result<u32, String> {
+/// 子进程形态 = CLI `watch --duration 0 --background`（常驻；参数与
+/// 菜单线路同构）。`--background`（任务 40，审查 Q/R）让子进程自行把
+/// stdout/stderr 归 NUL + 脱离控制台 + 恒开环形日志（256 KiB 有界，
+/// 取代旧的无界 tbg-background.log 重定向，CREATE_NO_WINDOW 的隐式
+/// stdout 无效句柄 panic 问题一并消除）；CREATE_NO_WINDOW + 独立
+/// 进程组保证无可见窗口、不受父进程退出/Ctrl+C 影响。
+///
+/// 任务 37（审查 D）：子进程就绪后自登记 `tbg-watch.tsv` 并监听
+/// `Local\tbg-lite.stop.<pid>`——`tbg-lite stop` 与菜单 `[3]` 都能停它
+/// （旧提示"用 [3] 停止"从此为真）。
+fn spawn_detached_watch(
+    strategy: WatchStrategy,
+    group_name: Option<&str>,
+) -> Result<u32, String> {
     use std::os::windows::process::CommandExt;
 
     let exe =
@@ -122,42 +138,23 @@ fn spawn_detached_watch(strategy: WatchStrategy, group_name: Option<&str>) -> Re
         })
         // CLI 默认 duration=60s；后台保活必须显式常驻
         .arg("--duration")
-        .arg("0");
+        .arg("0")
+        // 任务 37/40：后台模式（自脱离 + 环形日志 + PID 登记 + 停止事件）
+        .arg("--background");
     if let Some(name) = group_name {
         cmd.arg("--group").arg(name);
     }
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
     cmd.creation_flags(CREATE_NO_WINDOW | CREATE_NEW_PROCESS_GROUP);
-    // 显式 stdio：日志文件优先，回退 NUL（见函数注释）
-    if let Some(log) = background_log() {
-        let log_err = log
-            .try_clone()
-            .map_err(|e| format!("cannot duplicate background log handle: {e}"))?;
-        cmd.stdout(std::process::Stdio::from(log));
-        cmd.stderr(std::process::Stdio::from(log_err));
-    } else {
-        cmd.stdout(std::process::Stdio::null());
-        cmd.stderr(std::process::Stdio::null());
-    }
+    // stdio 不再由父进程接管：子进程 --background 在任何输出发生前
+    // SetStdHandle 归 NUL（Rust std 惰性缓存句柄，先重定向后首写）
     let child = cmd
         .spawn()
         .map_err(|e| format!("background watch spawn failed: {e}"))?;
     // 分离：不持有句柄、不等待（Windows 下 drop Child 不杀进程）；
-    // 返回 pid 供提示。之后用 `tbg-lite` 菜单 [3]/任务管理器结束。
+    // 返回 pid 供提示。停止途径：`tbg-lite stop` / 菜单 [3]（任务 37）
     Ok(child.id())
-}
-
-/// 后台保活日志文件（append）。目录沿用映射表数据目录
-/// `%LOCALAPPDATA%\tbg-lite`；任何失败返回 None（调用方回退 NUL）。
-fn background_log() -> Option<std::fs::File> {
-    let dir = crate::restoremap::data_dir().ok()?;
-    std::fs::create_dir_all(&dir).ok()?;
-    std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(dir.join("tbg-background.log"))
-        .ok()
 }
 
 /// 剥离行首 UTF-8 BOM（U+FEFF）——它不是 `trim()` 语义的空白，
@@ -168,18 +165,27 @@ fn strip_bom(line: &str) -> &str {
 
 /// 读一行 stdin。`None` = EOF / 读失败（调用方应走优雅退出路径）。
 /// 行首 U+FEFF（BOM）剥离后返回（见 `strip_bom`）。
+///
+/// 任务 41（审查 P1-J）：改字节读 + `from_utf8_lossy`——旧
+/// `read_line` 在 UTF-8 外编码（GBK 控制台）下输入中文会
+/// `Err(InvalidData)` → 被当 EOF → **菜单静默退出**；lossy 读把
+/// 非法序列替换为 U+FFFD（输入乱码但不退出）。入口的 CP 守卫
+/// （`console::utf8_console`）已把控制台输入切 65001，正常中文输入
+/// 实为 UTF-8 字节、无损。
 fn read_line() -> Option<String> {
-    let mut s = String::new();
-    match io::stdin().read_line(&mut s) {
+    use std::io::BufRead;
+    let mut buf: Vec<u8> = Vec::new();
+    match std::io::stdin().lock().read_until(b'\n', &mut buf) {
         Ok(0) | Err(_) => None,
-        Ok(_) => Some(strip_bom(&s).to_string()),
+        // 管道写端（PS StreamWriter）首写前置 UTF-8 BOM：read_until 会
+        // 把它并进首行，strip_bom 剥离
+        Ok(_) => Some(strip_bom(&String::from_utf8_lossy(&buf)).to_string()),
     }
 }
 
-/// 打印提示符并读一行（提示符需要显式 flush：stdout 是行缓冲）。
+/// 打印提示符并读一行（控制台直写无缓冲；管道路径自带 flush）。
 fn prompt(text: &str) -> Option<String> {
-    print!("{text}");
-    let _ = io::stdout().flush();
+    outp!("{text}");
     read_line()
 }
 
@@ -490,6 +496,61 @@ impl L10n {
         }
     }
 
+    /// 任务 37（D）：[3] 同时停掉后台保活实例的结果文案。
+    fn background_watch_result(&self, r: crate::watchpid::StopResult) -> String {
+        use crate::watchpid::StopResult;
+        match self.lang {
+            Lang::En => match r {
+                StopResult::NoWatch => String::new(),
+                StopResult::StaleCleared { pid } => {
+                    format!("menu: background watch (pid {pid}) was not running — stale entry removed")
+                }
+                StopResult::Graceful { pid } => {
+                    format!("menu: background watch stopped gracefully (pid {pid})")
+                }
+                StopResult::TerminatedNoEvent { pid } => {
+                    format!("menu: background watch (pid {pid}) unreachable — terminated")
+                }
+                StopResult::TerminatedTimeout { pid } => {
+                    format!("menu: background watch (pid {pid}) stopped after timeout (terminated)")
+                }
+                StopResult::Failed { pid } => {
+                    format!("menu: could not stop the background watch (pid {pid}) — try taskkill")
+                }
+            },
+            Lang::Zh => match r {
+                StopResult::NoWatch => String::new(),
+                StopResult::StaleCleared { pid } => {
+                    format!("menu：后台 watch（pid {pid}）未在运行——已清除陈旧登记")
+                }
+                StopResult::Graceful { pid } => {
+                    format!("menu：后台 watch 已优雅停止（pid {pid}）")
+                }
+                StopResult::TerminatedNoEvent { pid } => {
+                    format!("menu：后台 watch（pid {pid}）停止事件不可达——已直接终止")
+                }
+                StopResult::TerminatedTimeout { pid } => {
+                    format!("menu：后台 watch（pid {pid}）超时后被终止")
+                }
+                StopResult::Failed { pid } => {
+                    format!("menu：无法停止后台 watch（pid {pid}）——请尝试 taskkill")
+                }
+            },
+        }
+    }
+
+    /// 任务 37（D）：菜单横幅的后台实例提示行。
+    fn status_background_running(&self, pid: u32) -> String {
+        match self.lang {
+            Lang::En => format!(
+                "background watch running (pid {pid}) — [3] or 'tbg-lite stop' stops it"
+            ),
+            Lang::Zh => format!(
+                "后台 watch 运行中（pid {pid}）——[3] 或 'tbg-lite stop' 可停止"
+            ),
+        }
+    }
+
     fn stop_first_restore(&self) -> &'static str {
         match self.lang {
             Lang::En => {
@@ -565,10 +626,10 @@ impl L10n {
     fn background_started(&self, pid: u32) -> String {
         match self.lang {
             Lang::En => format!(
-                "menu: background watch started (pid {pid}) — rewrites keep being applied to new windows (log: %LOCALAPPDATA%\\tbg-lite\\tbg-background.log); run tbg-lite and use [3] to stop it, or `install` for boot persistence"
+                "menu: background watch started (pid {pid}) — rewrites keep being applied to new windows (log: %LOCALAPPDATA%\\tbg-lite\\tbg.log ring log); run tbg-lite and use [3] to stop it, or `install` for boot persistence"
             ),
             Lang::Zh => format!(
-                "menu：后台 watch 已启动（pid {pid}）——新窗口将继续被标记（日志：%LOCALAPPDATA%\\tbg-lite\\tbg-background.log）；再运行 tbg-lite 用 [3] 停止，开机延续用 `install`"
+                "menu：后台 watch 已启动（pid {pid}）——新窗口将继续被标记（日志：%LOCALAPPDATA%\\tbg-lite\\tbg.log 环形日志）；再运行 tbg-lite 用 [3] 停止，开机延续用 `install`"
             ),
         }
     }
@@ -636,20 +697,29 @@ impl L10n {
 }
 
 fn print_menu(loc: &L10n, running: Option<&WatchSession>) {
-    println!();
+    outln!("");
     if let Some(s) = running {
-        println!("{}", loc.status_running(s.label));
+        outln!("{}", loc.status_running(s.label));
     } else {
-        println!("{}", loc.status_not_running());
+        outln!("{}", loc.status_not_running());
     }
-    println!("{}", loc.item1());
-    println!("{}", loc.item2());
-    println!("{}", loc.item3());
-    println!("{}", loc.item4());
-    println!("{}", loc.item5());
-    println!("{}", loc.item6());
-    println!("{}", loc.item0());
-    println!("{}", loc.lang_hint());
+    // 任务 37（D）：后台保活实例（[0]→k / install 自启）存在时提示
+    // （陈旧登记静默回收——菜单不当告警员）
+    if let Some(info) = crate::watchpid::read() {
+        if crate::watchpid::is_running(info.pid) {
+            outln!("{}", loc.status_background_running(info.pid));
+        } else {
+            crate::watchpid::clear(info.pid);
+        }
+    }
+    outln!("{}", loc.item1());
+    outln!("{}", loc.item2());
+    outln!("{}", loc.item3());
+    outln!("{}", loc.item4());
+    outln!("{}", loc.item5());
+    outln!("{}", loc.item6());
+    outln!("{}", loc.item0());
+    outln!("{}", loc.lang_hint());
 }
 
 /// 菜单主循环。返回进程退出码。
@@ -657,8 +727,8 @@ pub(crate) fn run() -> ExitCode {
     // 任务 29：语言 = 系统 UI 语言自动检测（en-US CI → 英文，中文系统 →
     // 中文），菜单内 L 键随时切换（仅影响菜单层文案）。
     let mut loc = L10n::new();
-    println!("{}", loc.banner());
-    println!("{}", loc.tip());
+    outln!("{}", loc.banner());
+    outln!("{}", loc.tip());
     let mut session: Option<WatchSession> = None;
     let mut exit_restore_failed = false;
     loop {
@@ -667,11 +737,11 @@ pub(crate) fn run() -> ExitCode {
         if let Some(s) = session.take() {
             if s.handle.is_finished() {
                 match s.handle.join() {
-                    Ok(Ok(())) => println!("{}", loc.watch_ended_own()),
-                    Ok(Err(e)) => println!("{}", loc.watch_failed(&e)),
-                    Err(_) => println!("{}", loc.watch_panicked()),
+                    Ok(Ok(())) => outln!("{}", loc.watch_ended_own()),
+                    Ok(Err(e)) => outln!("{}", loc.watch_failed(&e)),
+                    Err(_) => outln!("{}", loc.watch_panicked()),
                 }
-                println!("{}", loc.status_not_running());
+                outln!("{}", loc.status_not_running());
             } else {
                 session = Some(s);
             }
@@ -679,8 +749,8 @@ pub(crate) fn run() -> ExitCode {
         print_menu(&loc, session.as_ref());
         let Some(line) = prompt("> ") else {
             // stdin 关闭：视同 [0]，默认不还原（无法交互确认）
-            println!();
-            println!("{}", loc.stdin_closed_watch_kept());
+            outln!("");
+            outln!("{}", loc.stdin_closed_watch_kept());
             if let Some(s) = session.take() {
                 let _ = s.stop_and_join();
             }
@@ -691,82 +761,98 @@ pub(crate) fn run() -> ExitCode {
                 // 任务 29：语言切换（会话内即时生效，不落盘——plan v2 §6-2
                 // 配置文件维持不需要）
                 loc.toggle();
-                println!("{}", loc.lang_switched());
+                outln!("{}", loc.lang_switched());
             }
             "1" => {
                 if session.is_some() {
-                    println!("{}", loc.watch_already_running());
+                    outln!("{}", loc.watch_already_running());
                 } else {
                     session = Some(spawn_watch(WatchStrategy::Ungroup, None));
-                    println!("{}", loc.watch_started_ungroup());
+                    outln!("{}", loc.watch_started_ungroup());
                 }
             }
             "2" => {
                 if session.is_some() {
-                    println!("{}", loc.watch_already_running());
+                    outln!("{}", loc.watch_already_running());
                     continue;
                 }
                 let Some(name_line) = prompt(loc.group_name_prompt()) else {
-                    println!();
-                    println!("{}", loc.stdin_closed_watch_kept());
+                    outln!("");
+                    // 任务 47（审查 K-③）：此处 watch 必未运行（上面
+                    // session.is_some() 已 continue）——旧文案恒错报
+                    // "watch 已停止"；与 [4] EOF 分支同文案
+                    outln!("{}", loc.stdin_closed_kept());
                     return exit_code(exit_restore_failed);
                 };
                 let name = name_line.trim();
                 if name.is_empty() {
-                    println!("{}", loc.cancelled_empty_group());
+                    outln!("{}", loc.cancelled_empty_group());
                     continue;
                 }
                 // 复用 CLI 同一套组名校验（长度/字符集 → 共享 AUMID 构造）
                 if let Err(e) = crate::appid::group_aumid(name) {
-                    println!("{}", loc.invalid_group_name(&e));
+                    outln!("{}", loc.invalid_group_name(&e));
                     continue;
                 }
-                session = Some(spawn_watch(WatchStrategy::Group, Some(name.to_string())));
-                println!("{}", loc.watch_started_group(name));
+                session = Some(spawn_watch(
+                    WatchStrategy::Group,
+                    Some(name.to_string()),
+                ));
+                outln!("{}", loc.watch_started_group(name));
             }
-            "3" => match session.take() {
-                Some(s) => match s.stop_and_join() {
-                    Ok(()) => println!("{}", loc.watch_stopped_kept()),
-                    Err(e) => println!("{}", loc.watch_stop_failed(&e)),
-                },
-                None => println!("{}", loc.watch_not_running()),
-            },
+            "3" => {
+                match session.take() {
+                    Some(s) => match s.stop_and_join() {
+                        Ok(()) => outln!("{}", loc.watch_stopped_kept()),
+                        Err(e) => outln!("{}", loc.watch_stop_failed(&e)),
+                    },
+                    None => outln!("{}", loc.watch_not_running()),
+                }
+                // 任务 37（D）：[3] 也停掉后台保活实例（[0]→k 启动的
+                // 分离进程）——旧提示"用 [3] 停止"从此为真。无登记时
+                // stop_registered 返回 NoWatch（不输出，避免噪声）
+                let bg = crate::watchpid::stop_registered();
+                let msg = loc.background_watch_result(bg);
+                if !msg.is_empty() {
+                    outln!("{msg}");
+                }
+            }
             "4" => {
                 if session.is_some() {
-                    println!("{}", loc.stop_first_restore());
+                    outln!("{}", loc.stop_first_restore());
                     continue;
                 }
                 let Some(confirm) = prompt(loc.restore_confirm()) else {
-                    println!();
-                    println!("{}", loc.stdin_closed_kept());
+                    outln!("");
+                    outln!("{}", loc.stdin_closed_kept());
                     return exit_code(exit_restore_failed);
                 };
                 if !is_yes(&confirm) {
-                    println!("{}", loc.restore_cancelled());
+                    outln!("{}", loc.restore_cancelled());
                     continue;
                 }
                 match crate::cmd_restore(&[]) {
-                    Ok(()) => println!("{}", loc.restore_finished()),
-                    Err(e) => println!("{}", loc.restore_failed(&e)),
+                    Ok(()) => outln!("{}", loc.restore_finished()),
+                    Err(e) => outln!("{}", loc.restore_failed(&e)),
                 }
             }
             "5" => {
                 if let Err(e) = crate::cmd_inspect(&[]) {
-                    println!("{}", loc.inspect_failed(&e));
+                    outln!("{}", loc.inspect_failed(&e));
                 }
             }
             "6" => {
                 // 任务 30：注入路线入口——信息 + 协同引导（无注入代码，
                 // plan v2 §5 红线不破；实操载体 = Windhawk）
-                println!("{}", loc.injection_route_info(session.is_some()));
+                outln!("{}", loc.injection_route_info(session.is_some()));
             }
             "0" => {
                 if let Some(s) = session.take() {
                     let answer = match prompt(loc.exit_confirm()) {
                         Some(confirm) => confirm,
                         None => {
-                            println!();
-                            println!("{}", loc.stdin_closed_watch_kept());
+                            outln!("");
+                            outln!("{}", loc.stdin_closed_watch_kept());
                             let _ = s.stop_and_join();
                             return exit_code(exit_restore_failed);
                         }
@@ -782,28 +868,28 @@ pub(crate) fn run() -> ExitCode {
                     let bg_group = s.group_name.clone();
                     // 先停（互斥体随线程 Drop 释放），后启
                     match s.stop_and_join() {
-                        Ok(()) => println!("{}", loc.watch_stopped_stats()),
-                        Err(e) => println!("{}", loc.watch_stop_failed(&e)),
+                        Ok(()) => outln!("{}", loc.watch_stopped_stats()),
+                        Err(e) => outln!("{}", loc.watch_stop_failed(&e)),
                     }
                     if restore_first {
                         match crate::cmd_restore(&[]) {
-                            Ok(()) => println!("{}", loc.restore_finished()),
+                            Ok(()) => outln!("{}", loc.restore_finished()),
                             Err(e) => {
-                                println!("{}", loc.restore_failed(&e));
+                                outln!("{}", loc.restore_failed(&e));
                                 exit_restore_failed = true;
                             }
                         }
                     } else if keep_background {
                         match spawn_detached_watch(bg_strategy, bg_group.as_deref()) {
-                            Ok(pid) => println!("{}", loc.background_started(pid)),
-                            Err(e) => println!("{}", loc.background_failed(&e)),
+                            Ok(pid) => outln!("{}", loc.background_started(pid)),
+                            Err(e) => outln!("{}", loc.background_failed(&e)),
                         }
                     }
                 }
-                println!("{}", loc.exiting_bye());
+                outln!("{}", loc.exiting_bye());
                 return exit_code(exit_restore_failed);
             }
-            other => println!("{}", loc.unknown_option(other)),
+            other => outln!("{}", loc.unknown_option(other)),
         }
     }
 }
