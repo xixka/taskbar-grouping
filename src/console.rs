@@ -72,6 +72,7 @@ pub(crate) fn install_ctrl_handler() -> bool {
 ///   忽略（`let _ =`，正是期望状态）；
 /// - NUL 句柄 `mem::forget` 不回收：句柄须存活至进程结束，drop 会把
 ///   `SetStdHandle` 指向的底层句柄关闭。
+///
 /// 事件轨迹由环形日志承担（`--background` 恒开，256 KiB 有界）。
 pub(crate) fn detach_console() -> Result<(), String> {
     use std::os::windows::io::AsRawHandle;
@@ -197,15 +198,11 @@ pub(crate) fn utf8_console() -> ConsoleCpGuard {
         let out_cp = GetConsoleOutputCP();
         let in_cp = GetConsoleCP();
         // 0 = 无控制台句柄（GetConsole* 失败）；已是 65001 则无需记录
-        if out_cp != 0 && out_cp != CP_UTF8 {
-            if SetConsoleOutputCP(CP_UTF8).is_ok() {
-                guard.restore_out_cp = out_cp;
-            }
+        if out_cp != 0 && out_cp != CP_UTF8 && SetConsoleOutputCP(CP_UTF8).is_ok() {
+            guard.restore_out_cp = out_cp;
         }
-        if in_cp != 0 && in_cp != CP_UTF8 {
-            if SetConsoleCP(CP_UTF8).is_ok() {
-                guard.restore_in_cp = in_cp;
-            }
+        if in_cp != 0 && in_cp != CP_UTF8 && SetConsoleCP(CP_UTF8).is_ok() {
+            guard.restore_in_cp = in_cp;
         }
     }
     guard
@@ -242,23 +239,6 @@ unsafe extern "system" fn console_ctrl_handler(event: u32) -> BOOL {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn stop_flag_roundtrip() {
-        // 处理器本体无法在单测里安全驱动（系统线程上下文），这里只验
-        // 标志语义：默认 false，置位后可见（不与其他测试并行污染：
-        // 置位后复位）
-        assert!(matches!(STOP.load(Ordering::Relaxed), _));
-        STOP.store(true, Ordering::Relaxed);
-        assert!(stop_requested());
-        STOP.store(false, Ordering::Relaxed);
-        assert!(!stop_requested());
-    }
-}
-
 // ============ 菜单层输出宏（任务 41，审查 J） ============
 //
 // 用法与 println!/print! 同构；控制台 → WriteConsoleW（代码页无关），
@@ -280,4 +260,21 @@ macro_rules! outp {
     ($($arg:tt)*) => {
         $crate::console::out_print(format_args!($($arg)*))
     };
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn stop_flag_roundtrip() {
+        // 处理器本体无法在单测里安全驱动（系统线程上下文），这里只验
+        // 标志语义：默认 false，置位后可见（不与其他测试并行污染：
+        // 置位后复位）
+        assert!(matches!(STOP.load(Ordering::Relaxed), _));
+        STOP.store(true, Ordering::Relaxed);
+        assert!(stop_requested());
+        STOP.store(false, Ordering::Relaxed);
+        assert!(!stop_requested());
+    }
 }

@@ -84,7 +84,7 @@ pub(crate) unsafe fn window_text(hwnd: HWND) -> String {
         hwnd,
         WM_GETTEXT,
         // wparam：缓冲容量（含 NUL，按 WM_GETTEXT 契约）
-        WPARAM((buf.len() - 1) as usize),
+        WPARAM(buf.len() - 1),
         LPARAM(buf.as_mut_ptr() as isize),
         // ABORTIFHUNG：窗口已被系统判定挂起时立即返回，不等 100ms
         SMTO_ABORTIFHUNG,
