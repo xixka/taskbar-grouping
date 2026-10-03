@@ -89,9 +89,12 @@
    仓库绿色实绩（run 37002122332，master 6e2806f）；lockfile 新鲜度
    在 1.99.0 下已验证无漂移。发布说明 MSRV 文案同步（"stable
    toolchain" → "1.99.0 pinned"）。落地方式：预检分支 ci-preflight-0-9
-   两轮（本地零 cargo 红线不破——fmt 一次性格式化与 clippy 报告由 CI
-   执行并提交回分支，正式门禁由 lint job 承担）→ master 三笔提交
-   （钉版 / 缓存 / lint+格式化+清零+文档）。
+   三轮（本地零 cargo 红线不破——fmt 一次性格式化与 clippy 报告由 CI
+   执行并提交回分支，正式门禁由 lint job 承担；ci run 37028470998 /
+   37030144922 为 fmt 诊断轮，37030670464 五门全绿）→ master 三笔提交
+   （钉版 / 缓存 / lint+格式化+清零+文档），验证 run 37031746903
+   （ed125b9）：五门全绿 + dev-release 滚动发布；缓存实测 build job
+   全程 83 s（对照冷编约 2-4 分钟）、lint 94 s、lockfile 23 s。
 
 ## §1 现状（截至任务 15-20 全部完成，含 Phase R 22-26）
 
