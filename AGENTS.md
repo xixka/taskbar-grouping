@@ -5,7 +5,7 @@
 tbg-lite：零注入单文件 Windows 10/11 任务栏分组工具（Rust）。用 Shell 公开属性存储
 API（`SHGetPropertyStoreForWindow` + `PKEY_AppUserModel_ID`）改写运行中窗口的分组
 归属，不注入任何进程。实现路线与任务拆分见 `docs/plan.md`（v2，§2 路线 /
-§3 任务清单）。
+§3 任务清单收束摘要——明细已归档 git 历史，§0-10）。
 
 **注入版已删除（2026-10-02 维护者决策，plan v2 §0-8）**：2026-09-28 曾按
 决策 6 双版本并行（主版 tbg-lite + 注入版 tbg-inject，`inj/` 三工作区
@@ -73,7 +73,7 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 据此：非注入 B+ 为唯一路线（2026-09-28 决策 6 起注入版 A 曾以独立产物
 并行，2026-10-02 §0-8 删除——见"项目定位"与 plan v2 §0-6/§0-8/§5）；
 默认行为 = Disable grouping on the taskbar，无排除列表；后续任务一律
-按 plan v2 §3 任务清单立项。
+按 plan v2 §3 立项规则立项（任务号自 38 起，§0-10）。
 
 ## 构建 / 测试 / lint 命令
 
@@ -190,7 +190,8 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   六个编译型 job 配 Swatinem/rust-cache v2.9.2（钉 SHA）构建缓存
   （lockfile 无编译不加）；全部 Install Rust 经 `rust-toolchain.toml`
   钉版 1.99.0（本地 rustup 同源）。
-- `docs/plan.md` —— 实施计划 v2（§0 决策 / §3 任务清单，已全部完成；提交一一对应任务号）
+- `docs/plan.md` —— 实施计划 v2（§0 决策 / §3 任务清单收束摘要——任务
+  13–37 明细已归档 git 历史，§0-10；提交一一对应任务号）
 - `docs/coverage-matrix.md` —— 多应用覆盖矩阵记录表（任务 15 已回填关闭：
   维护者 2026-09-23 指令"CI 测试等同真机测试"，CI 行即真机行；§8 裁决
   B+ 持续为主——用户应用覆盖 7/7=100%、竞态 0%；唯一 0 分行 = shell 自管
@@ -243,7 +244,8 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   docs/phase0b-acceptance.md §4（v1 §6 预算表已随 v1 存档于 git 历史）
 - 改产物元数据（版本资源/应用清单）→ 读 `build.rs`（任务 32；winresource
   走 build-dependencies，`Cargo.toml` 与 `Cargo.lock` 必须同笔提交）
-- 实现新功能 → 在 docs/plan.md v2 §3 任务清单找到对应任务号，按任务号实现
+- 实现新功能 → 任务号对号入座 docs/plan.md v2 §3 收束摘要（已完成
+  13–37；新任务号自 38 起，按 §0-10 立项规则），按任务号实现
   并单独提交；注入版（`inj/`）曾随任务 34-37 落地、2026-10-02 按 §0-8
   删除（Win11 分组限制见 plan v2 §5 已知限制⑤）——仓库内已无注入代码，
   重启须重新立项（红线见上）
