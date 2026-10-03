@@ -4,8 +4,11 @@
 
 tbg-lite：零注入单文件 Windows 10/11 任务栏分组工具（Rust）。用 Shell 公开属性存储
 API（`SHGetPropertyStoreForWindow` + `PKEY_AppUserModel_ID`）改写运行中窗口的分组
-归属，不注入任何进程。实现路线与任务拆分见 `docs/plan.md`（v2，§2 路线 /
-§3 任务清单收束摘要——明细已归档 git 历史，§0-10）。
+归属，不注入任何进程。历史实施计划 `docs/plan.md`（v2）已删除（决策 11，
+2026-10-03，任务 0–37 全部完成后清理）：全文存档 git 历史（最后版本
+commit bfd7de9，含 §0 决策台账与 §5 注入版技术结论；§3 任务明细存档
+489fabf、v1 全文存档 8e09b0e）。本文件中"plan v2 §X"类历史引用均指向
+该存档；现行治理文档 = 本文件。
 
 **注入版已删除（2026-10-02 维护者决策，plan v2 §0-8）**：2026-09-28 曾按
 决策 6 双版本并行（主版 tbg-lite + 注入版 tbg-inject，`inj/` 三工作区
@@ -72,8 +75,8 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 详见 docs/plan.md v2 Phase R。
 据此：非注入 B+ 为唯一路线（2026-09-28 决策 6 起注入版 A 曾以独立产物
 并行，2026-10-02 §0-8 删除——见"项目定位"与 plan v2 §0-6/§0-8/§5）；
-默认行为 = Disable grouping on the taskbar，无排除列表；后续任务一律
-按 plan v2 §3 立项规则立项（任务号自 38 起，§0-10）。
+默认行为 = Disable grouping on the taskbar，无排除列表；后续工作按本文件
+「条件路由」与提交纪律直接进行（plan.md 任务号体系已随决策 11 终止）。
 
 ## 构建 / 测试 / lint 命令
 
@@ -190,8 +193,9 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   六个编译型 job 配 Swatinem/rust-cache v2.9.2（钉 SHA）构建缓存
   （lockfile 无编译不加）；全部 Install Rust 经 `rust-toolchain.toml`
   钉版 1.99.0（本地 rustup 同源）。
-- `docs/plan.md` —— 实施计划 v2（§0 决策 / §3 任务清单收束摘要——任务
-  13–37 明细已归档 git 历史，§0-10；提交一一对应任务号）
+- ~~`docs/plan.md`~~ —— 已删除（决策 11，2026-10-03，任务全部完成）：
+  实施计划 v2 全文存档 git 历史（最后版本 commit bfd7de9；§3 任务明细
+  489fabf；每任务一提交，逐任务记录见 git log）
 - `docs/coverage-matrix.md` —— 多应用覆盖矩阵记录表（任务 15 已回填关闭：
   维护者 2026-09-23 指令"CI 测试等同真机测试"，CI 行即真机行；§8 裁决
   B+ 持续为主——用户应用覆盖 7/7=100%、竞态 0%；唯一 0 分行 = shell 自管
@@ -204,7 +208,8 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 ## 完成的定义（DoD）
 
 1. CI（windows-latest，`cargo build --release` + `lint` 静态门禁〔§0-9 起〕）通过；
-2. 每个任务单独提交，格式 `feat(模块): 任务号-标题`；
+2. 每个功能单独提交，格式 `feat(模块): 标题`（原「任务号-标题」格式随
+   plan.md 归档停用，决策 11；历史提交的任务号对应 plan v2 §3，见 git 存档）；
 3. 涉及 Windows 运行时行为的改动，在提交信息中注明"运行时行为待 Windows 实测"
    （CI 只验证编译，不验证行为）。任务 9 起：双线路 AUMID 行为已由
    `runtime-smoke` job 在 CI 断言通过（任务栏视觉/竞态/多应用覆盖仍需真机实测）。
@@ -216,8 +221,9 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
   本仓库**——仓库为纯 tbg-lite 单包，`src/` 主包保持零注入；
   `SetWindowsHookEx` 跨进程注入、inline hook、内存补丁、私有符号/偏移
   解析仍禁（无清室实现依据）；禁止引用 Windhawk mod 代码或 v1 符号表
-  （GPL 清室红线，plan v2 §6-1）；若未来重启路线 A，须先按 plan v2 §5
-  技术结论重新立项（git 历史中的 inj/ 实现为复用基准）。
+  （GPL 清室红线，原 plan v2 §6-1，已存档）；若未来重启路线 A，须先按
+  plan v2 §5 技术结论（存档 commit bfd7de9）重新立项（git 历史中的 inj/
+  实现为复用基准）。
 - 禁止弱化或删除 CI 步骤 / 验证断言；验证失败只能修复，最多 3 轮。
   （§0-8 例外在案：2026-10-02 注入版 Phase INJ 27 断言随注入版整体删除，
   属维护者决策而非弱化；主版门禁不得引用此例。）
@@ -225,7 +231,7 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 - 禁止提交机密（令牌、密钥、私有配置）。
 - 直推 master；禁止 force push，回滚一律 `git revert`。
 - 提交身份固定为 xaxka <xka@live.com>。
-- 实际情况与 docs/plan.md 冲突时：停下报告，不许将错就错。
+- 实际情况与文档记载（本文件 / docs/ 各记录）冲突时：停下报告，不许将错就错。
 - 双线路同等维护（2026-09-22 增补）：线路一/线路二同步演进，任何 watch/
   restore 行为改动须同时验证两线路（runtime-smoke 两个 Phase 均须保持
   绿灯）；禁止只修/只留一条线路。
@@ -238,15 +244,15 @@ actions 钉 SHA、Cargo.lock 入库 --locked 构建；31 项单元测试入 CI �
 
 - ~~改注入版（`inj/` 成员）~~ → §0-8（2026-10-02）注入版已删除：`inj/`
   三成员（tbg-proto / tbg-hook / tbg-inject）随 `[workspace]` 节移除，
-  需要时以 git 历史为复用基准（技术结论见 plan v2 §5）
+  需要时以 git 历史为复用基准（技术结论见 plan v2 §5，存档 commit bfd7de9）
 - 改 CI 或构建命令 → 先读 `.github/workflows/ci.yml`
 - 改依赖或 release profile → 读 `Cargo.toml`；体积/内存口径参考
   docs/phase0b-acceptance.md §4（v1 §6 预算表已随 v1 存档于 git 历史）
 - 改产物元数据（版本资源/应用清单）→ 读 `build.rs`（任务 32；winresource
   走 build-dependencies，`Cargo.toml` 与 `Cargo.lock` 必须同笔提交）
-- 实现新功能 → 任务号对号入座 docs/plan.md v2 §3 收束摘要（已完成
-  13–37；新任务号自 38 起，按 §0-10 立项规则），按任务号实现
-  并单独提交；注入版（`inj/`）曾随任务 34-37 落地、2026-10-02 按 §0-8
+- 实现新功能 → 直接实现并单独提交（plan.md 任务号体系已随决策 11 终止，
+  历史任务号对应关系见 git 存档 §3）；注入版（`inj/`）曾随任务 34-37
+  落地、2026-10-02 按 §0-8
   删除（Win11 分组限制见 plan v2 §5 已知限制⑤）——仓库内已无注入代码，
   重启须重新立项（红线见上）
 - 改双线路行为 → 读 src/winevent.rs（apply_ungroup / apply_group）与

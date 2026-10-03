@@ -15,7 +15,8 @@ admin rights. Single exe, ~1.5 MB private working set.
 > property-store call (known limitation 5, measured on CI and on a classic
 > taskbar), so the in-process hook could not change grouping — zero
 > user-visible effect. Its code and technical findings stay in git history
-> and old release downloads; see `docs/plan.md` §5.
+> and old release downloads; see `docs/plan.md` §5 in git history
+> (final version: commit `bfd7de9`).
 
 The two strategy lines (`watch --strategy`):
 
@@ -96,7 +97,8 @@ never changed while it was active. With the maintainer's goal ("the
 Windhawk mod's effect without Windhawk's memory cost") fully served by
 tbg-lite (user-app coverage 7/7, 0% race, ~1.5 MB working set), the
 edition was deleted rather than shipped as a no-effect canary
-(decision log: `docs/plan.md` §0-8; technical findings: §5).
+(decision log: `docs/plan.md` §0-8 in git history, commit `bfd7de9`;
+technical findings: its §5).
 
 Practical notes for past users:
 
@@ -123,7 +125,8 @@ mods. Two things to keep in mind:
 
 ## Evidence & verification
 
-- Implementation plan and task breakdown: [`docs/plan.md`](docs/plan.md) (route B+, v2)
+- Implementation plan and task breakdown: archived after full completion
+  (2026-10-03) — `docs/plan.md` v2 in git history (commit `bfd7de9`)
 - Phase 0b acceptance evidence: [`docs/phase0b-acceptance.md`](docs/phase0b-acceptance.md)
 - Coverage matrix and the "B+ stays the main route" ruling:
   [`docs/coverage-matrix.md`](docs/coverage-matrix.md)
